@@ -61,17 +61,34 @@ typedef enum ipsec_lwip_action_enum
 	IPSEC_LWIP_ACTION_ERROR = 3
 } ipsec_lwip_action;
 
+typedef union ipsec_lwip_work_buffer_union
+{
+	void *alignment_pointer;
+	unsigned long alignment_word;
+	unsigned char bytes[IPSEC_LWIP_WORKBUF_SIZE];
+} ipsec_lwip_work_buffer;
+
 typedef struct ipsec_lwip_adapter_struct
 {
 	db_set_netif *databases;
-	unsigned char work_buffer[IPSEC_LWIP_WORKBUF_SIZE];
+	spd_entry *owned_inbound_spd;
+	spd_entry *owned_outbound_spd;
+	sad_entry *owned_inbound_sad;
+	sad_entry *owned_outbound_sad;
+	unsigned char owns_memory;
+	ipsec_lwip_work_buffer work_buffer;
 } ipsec_lwip_adapter;
 
 /*
- * The caller owns adapter and db_set_netif storage. This keeps allocation and
- * lifetime explicit for embedded targets and avoids forcing one heap model.
+ * ipsec_lwip_adapter_attach() keeps ownership caller-defined. For ports that
+ * prefer a simple heap-managed setup, ipsec_lwip_adapter_attach_malloc()
+ * allocates the adapter and SAD/SPD backing arrays, reserves one db_set_netif
+ * from the static SA core pool, and binds the result to one netif in a single
+ * step.
  */
 void ipsec_lwip_adapter_attach(struct netif *netif, ipsec_lwip_adapter *adapter, db_set_netif *databases);
+ipsec_lwip_adapter *ipsec_lwip_adapter_attach_malloc(struct netif *netif);
+void ipsec_lwip_adapter_deinit(struct netif *netif);
 ipsec_lwip_adapter *ipsec_lwip_adapter_get(const struct netif *netif);
 
 ipsec_lwip_action ipsec_lwip_input(struct pbuf *p, struct netif *inp, struct pbuf **result);

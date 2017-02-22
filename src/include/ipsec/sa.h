@@ -68,7 +68,7 @@
 #define IPSEC_HMAC_MD5			(1)		/**< Defines HMAC-MD5 as the authentication algorithm for an AH or an ESP packet */
 #define IPSEC_HMAC_SHA1			(2)		/**< Defines HMAC-SHA1 as the authentication algorithm for an AH or an ESP packet */
 
-#define IPSEC_NR_NETIFS			(1)		/**< Defines the number of network interfaces. This is used to reserve space for db_netif_struct's */
+#define IPSEC_NR_NETIFS			(2)		/**< Defines the number of network interfaces. This is used to reserve space for db_netif_struct's */
 
 typedef struct sa_entry_struct sad_entry ;					/**< Security Association Database entry */
 
@@ -187,6 +187,8 @@ typedef struct db_set_netif_struct
 
 
 /* SPD functions */
+db_set_netif *ipsec_spd_init_dbs(db_set_netif *dbs, spd_entry *inbound_spd_data, spd_entry *outbound_spd_data, sad_entry *inbound_sad_data, sad_entry *outbound_sad_data) ;
+
 db_set_netif	*ipsec_spd_load_dbs(spd_entry *inbound_spd_data, spd_entry *outbound_spd_data, sad_entry *inbound_sad_data, sad_entry *outbound_sad_data) ;
 
 ipsec_status	ipsec_spd_release_dbs(db_set_netif *dbs) ;

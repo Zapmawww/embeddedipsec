@@ -29,10 +29,13 @@
 
 #ifndef __NO_TCPIP_STACK__
 
+#include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "lwip/ip.h"
 
+#include "ipsec/debug.h"
 #include "netif/ipsec_lwip_adapter.h"
 
 static u8_t ipsec_lwip_client_data_id;
@@ -49,24 +52,44 @@ static u8_t ipsec_lwip_get_client_data_id(void)
 	return ipsec_lwip_client_data_id;
 }
 
-static ipsec_lwip_adapter *ipsec_lwip_require_adapter(struct netif *netif)
+static int ipsec_lwip_check_alignment(ipsec_lwip_adapter *adapter, int headroom, unsigned char **packet, int report_success)
 {
-	if(netif == NULL)
+	uintptr_t buffer_addr;
+	uintptr_t packet_addr;
+	unsigned int alignment;
+	unsigned char *local_packet;
+
+	if(adapter == NULL)
 	{
-		return NULL;
+		return 0;
 	}
 
-	return ipsec_lwip_adapter_get(netif);
-}
-
-static ipsec_lwip_action ipsec_lwip_copy_outcome(struct pbuf *original, struct pbuf **result)
-{
-	if(result != NULL)
+	if(packet == NULL)
 	{
-		*result = original;
+		packet = &local_packet;
 	}
 
-	return IPSEC_LWIP_ACTION_BYPASS;
+	alignment = (unsigned int)sizeof(void *);
+	buffer_addr = (uintptr_t)(void *)adapter->work_buffer.bytes;
+	packet_addr = buffer_addr + (uintptr_t)headroom;
+	*packet = adapter->work_buffer.bytes + headroom;
+
+	if(((buffer_addr % alignment) != 0U) || ((packet_addr % alignment) != 0U))
+	{
+		IPSEC_LOG_ERR("ipsec_lwip_check_alignment", IPSEC_STATUS_FAILURE,
+				  ("misaligned work buffer: base=%p packet=%p align=%u headroom=%d",
+				   (void *)adapter->work_buffer.bytes, (void *)*packet, alignment, headroom));
+		return 0;
+	}
+
+	if(report_success)
+	{
+		IPSEC_LOG_MSG("ipsec_lwip_check_alignment",
+				  ("work buffer aligned: base=%p packet=%p align=%u",
+				   (void *)adapter->work_buffer.bytes, (void *)*packet, alignment));
+	}
+
+	return 1;
 }
 
 /*
@@ -75,9 +98,9 @@ static ipsec_lwip_action ipsec_lwip_copy_outcome(struct pbuf *original, struct p
  * The lwIP shim therefore flattens the incoming pbuf chain into a work buffer
  * before calling the core transform functions.
  */
-static int ipsec_lwip_copy_to_buffer(struct pbuf *p, unsigned char *buffer, int headroom, unsigned char **packet)
+static int ipsec_lwip_copy_to_buffer(struct pbuf *p, ipsec_lwip_adapter *adapter, int headroom, unsigned char **packet)
 {
-	if((p == NULL) || (buffer == NULL) || (packet == NULL))
+	if((p == NULL) || (adapter == NULL) || (packet == NULL))
 	{
 		return -1;
 	}
@@ -87,7 +110,11 @@ static int ipsec_lwip_copy_to_buffer(struct pbuf *p, unsigned char *buffer, int 
 		return -1;
 	}
 
-	*packet = buffer + headroom;
+	if(!ipsec_lwip_check_alignment(adapter, headroom, packet, 0))
+	{
+		return -1;
+	}
+
 	if(pbuf_copy_partial(p, *packet, p->tot_len, 0) != p->tot_len)
 	{
 		return -1;
@@ -120,87 +147,6 @@ static struct pbuf *ipsec_lwip_alloc_packet(const void *data, u16_t len)
 	return packet;
 }
 
-/*
- * Outbound processing is identical for AH/ESP and transport/tunnel mode at the
- * hook level: resolve one outbound SPD entry, interpret the policy, then hand
- * the packet to the requested core transform. The mode-specific packet surgery
- * stays inside ipsec_output()/ipsec_output_ipv6().
- */
-static ipsec_lwip_action ipsec_lwip_transform_output(unsigned char *packet, int packet_len,
-									 ipsec_lwip_adapter *adapter,
-									 int (*transform)(unsigned char *, int, int *, int *, void const *, void const *, void *),
-									 const void *src, const void *dst,
-									 struct pbuf **result)
-{
-	int payload_offset;
-	/*
-	 * lwIP has already selected the egress netif, so the per-netif outbound SPD is
-	 * the only policy database consulted here. A missing SPD entry is treated as an
-	 * integration error rather than an implicit bypass.
-	 */
-	int payload_size;
-	spd_entry *spd;
-	struct pbuf *output;
-	int status;
-
-	payload_offset = 0;
-	payload_size = 0;
-	spd = ipsec_spd_lookup(packet, &adapter->databases->outbound_spd);
-	if(spd == NULL)
-	{
-		if(result != NULL)
-		{
-			*result = NULL;
-		}
-		return IPSEC_LWIP_ACTION_ERROR;
-	}
-
-	if(spd->policy == POLICY_BYPASS)
-	{
-		if(result != NULL)
-		{
-			*result = NULL;
-		}
-		return IPSEC_LWIP_ACTION_BYPASS;
-	}
-
-	if((spd->policy == POLICY_DISCARD) || (spd->sa == NULL))
-	{
-		if(result != NULL)
-		{
-			*result = NULL;
-		}
-		return spd->policy == POLICY_DISCARD ? IPSEC_LWIP_ACTION_DISCARD : IPSEC_LWIP_ACTION_ERROR;
-	}
-
-	status = transform(packet, packet_len, &payload_offset, &payload_size, src, dst, spd);
-	if(status != IPSEC_STATUS_SUCCESS)
-	{
-		if(result != NULL)
-		{
-			*result = NULL;
-		}
-		return IPSEC_LWIP_ACTION_ERROR;
-	}
-
-	output = ipsec_lwip_alloc_packet(packet + payload_offset, (u16_t)payload_size);
-	if(output == NULL)
-	{
-		if(result != NULL)
-		{
-			*result = NULL;
-		}
-		return IPSEC_LWIP_ACTION_ERROR;
-	}
-
-	if(result != NULL)
-	{
-		*result = output;
-	}
-
-	return IPSEC_LWIP_ACTION_DELIVER;
-}
-
 static void ipsec_lwip_adapter_init(ipsec_lwip_adapter *adapter, db_set_netif *databases)
 {
 	if(adapter == NULL)
@@ -209,7 +155,13 @@ static void ipsec_lwip_adapter_init(ipsec_lwip_adapter *adapter, db_set_netif *d
 	}
 
 	adapter->databases = databases;
-	memset(adapter->work_buffer, 0, sizeof(adapter->work_buffer));
+	adapter->owned_inbound_spd = NULL;
+	adapter->owned_outbound_spd = NULL;
+	adapter->owned_inbound_sad = NULL;
+	adapter->owned_outbound_sad = NULL;
+	adapter->owns_memory = 0;
+	memset(adapter->work_buffer.bytes, 0, sizeof(adapter->work_buffer.bytes));
+	ipsec_lwip_check_alignment(adapter, IPSEC_LWIP_WORKBUF_HEADROOM, NULL, 0);
 }
 
 static void ipsec_lwip_adapter_bind(struct netif *netif, ipsec_lwip_adapter *adapter)
@@ -226,6 +178,107 @@ void ipsec_lwip_adapter_attach(struct netif *netif, ipsec_lwip_adapter *adapter,
 {
 	ipsec_lwip_adapter_init(adapter, databases);
 	ipsec_lwip_adapter_bind(netif, adapter);
+}
+
+ipsec_lwip_adapter *ipsec_lwip_adapter_attach_malloc(struct netif *netif)
+{
+	ipsec_lwip_adapter *adapter;
+	db_set_netif *databases;
+	spd_entry *inbound_spd;
+	spd_entry *outbound_spd;
+	sad_entry *inbound_sad;
+	sad_entry *outbound_sad;
+
+	if(netif == NULL)
+	{
+		return NULL;
+	}
+
+	adapter = ipsec_lwip_adapter_get(netif);
+	if(adapter != NULL)
+	{
+		return adapter;
+	}
+
+	adapter = (ipsec_lwip_adapter *)malloc(sizeof(*adapter));
+	inbound_spd = (spd_entry *)malloc(sizeof(*inbound_spd) * IPSEC_MAX_SPD_ENTRIES);
+	outbound_spd = (spd_entry *)malloc(sizeof(*outbound_spd) * IPSEC_MAX_SPD_ENTRIES);
+	inbound_sad = (sad_entry *)malloc(sizeof(*inbound_sad) * IPSEC_MAX_SAD_ENTRIES);
+	outbound_sad = (sad_entry *)malloc(sizeof(*outbound_sad) * IPSEC_MAX_SAD_ENTRIES);
+
+	if((adapter == NULL) || (inbound_spd == NULL) || (outbound_spd == NULL) ||
+	   (inbound_sad == NULL) || (outbound_sad == NULL))
+	{
+		free(outbound_sad);
+		free(inbound_sad);
+		free(outbound_spd);
+		free(inbound_spd);
+		free(adapter);
+		return NULL;
+	}
+
+	memset(adapter, 0, sizeof(*adapter));
+	memset(inbound_spd, 0, sizeof(*inbound_spd) * IPSEC_MAX_SPD_ENTRIES);
+	memset(outbound_spd, 0, sizeof(*outbound_spd) * IPSEC_MAX_SPD_ENTRIES);
+	memset(inbound_sad, 0, sizeof(*inbound_sad) * IPSEC_MAX_SAD_ENTRIES);
+	memset(outbound_sad, 0, sizeof(*outbound_sad) * IPSEC_MAX_SAD_ENTRIES);
+
+	databases = ipsec_spd_load_dbs(inbound_spd, outbound_spd, inbound_sad, outbound_sad);
+	if(databases == NULL)
+	{
+		free(outbound_sad);
+		free(inbound_sad);
+		free(outbound_spd);
+		free(inbound_spd);
+		free(adapter);
+		return NULL;
+	}
+
+	ipsec_lwip_adapter_init(adapter, databases);
+	adapter->owned_inbound_spd = inbound_spd;
+	adapter->owned_outbound_spd = outbound_spd;
+	adapter->owned_inbound_sad = inbound_sad;
+	adapter->owned_outbound_sad = outbound_sad;
+	adapter->owns_memory = 1;
+	ipsec_lwip_adapter_bind(netif, adapter);
+
+	return adapter;
+}
+
+void ipsec_lwip_adapter_deinit(struct netif *netif)
+{
+	ipsec_lwip_adapter *adapter;
+	db_set_netif *databases;
+
+	if(netif == NULL)
+	{
+		return;
+	}
+
+	adapter = ipsec_lwip_adapter_get(netif);
+	if(adapter == NULL)
+	{
+		return;
+	}
+
+	netif_set_client_data(netif, ipsec_lwip_get_client_data_id(), NULL);
+	databases = adapter->databases;
+	if(databases != NULL)
+	{
+		ipsec_spd_release_dbs(databases);
+	}
+
+	if(adapter->owns_memory)
+	{
+		free(adapter->owned_outbound_sad);
+		free(adapter->owned_inbound_sad);
+		free(adapter->owned_outbound_spd);
+		free(adapter->owned_inbound_spd);
+		free(adapter);
+		return;
+	}
+
+	adapter->databases = NULL;
 }
 
 ipsec_lwip_adapter *ipsec_lwip_adapter_get(const struct netif *netif)
@@ -246,11 +299,9 @@ ipsec_lwip_action ipsec_lwip_input(struct pbuf *p, struct netif *inp, struct pbu
 	int payload_offset;
 	int payload_size;
 	int status;
-	spd_entry *spd;
 	struct pbuf *output;
 
-	adapter = ipsec_lwip_require_adapter(inp);
-
+	adapter = ipsec_lwip_adapter_get(inp);
 	if((adapter == NULL) || (adapter->databases == NULL))
 	{
 		if(result != NULL)
@@ -260,7 +311,7 @@ ipsec_lwip_action ipsec_lwip_input(struct pbuf *p, struct netif *inp, struct pbu
 		return IPSEC_LWIP_ACTION_ERROR;
 	}
 
-	packet_len = ipsec_lwip_copy_to_buffer(p, adapter->work_buffer, IPSEC_LWIP_WORKBUF_HEADROOM, &packet);
+	packet_len = ipsec_lwip_copy_to_buffer(p, adapter, IPSEC_LWIP_WORKBUF_HEADROOM, &packet);
 	if(packet_len < 0)
 	{
 		if(result != NULL)
@@ -270,40 +321,6 @@ ipsec_lwip_action ipsec_lwip_input(struct pbuf *p, struct netif *inp, struct pbu
 		return IPSEC_LWIP_ACTION_ERROR;
 	}
 
-	/*
-	 * The inbound hook sees both protected AH/ESP traffic and ordinary plaintext IP
-	 * traffic. Plaintext traffic still runs through the inbound SPD so a configured
-	 * APPLY policy can reject packets that should have arrived protected.
-	 */
-	if((ipsec_packet_protocol(packet) != IPSEC_PROTO_AH) && (ipsec_packet_protocol(packet) != IPSEC_PROTO_ESP))
-	{
-		spd = ipsec_spd_lookup(packet, &adapter->databases->inbound_spd);
-		if(spd == NULL)
-		{
-			if(result != NULL)
-			{
-				*result = NULL;
-			}
-			return IPSEC_LWIP_ACTION_ERROR;
-		}
-
-		if(spd->policy == POLICY_BYPASS)
-		{
-			return ipsec_lwip_copy_outcome(p, result);
-		}
-
-		if(result != NULL)
-		{
-			*result = NULL;
-		}
-		return IPSEC_LWIP_ACTION_DISCARD;
-	}
-
-	/*
-	 * ipsec_input() rewrites the working buffer in place and reports where the inner
-	 * packet now starts. That offset can be zero for transport mode or point into the
-	 * middle of the buffer for tunnel decapsulation.
-	 */
 	payload_offset = 0;
 	payload_size = 0;
 	status = ipsec_input(packet, packet_len, &payload_offset, &payload_size, adapter->databases);
@@ -334,20 +351,43 @@ ipsec_lwip_action ipsec_lwip_input(struct pbuf *p, struct netif *inp, struct pbu
 	return IPSEC_LWIP_ACTION_DELIVER;
 }
 
-static int ipsec_lwip_call_output_ipv4(unsigned char *packet, int packet_len, int *payload_offset,
-									 int *payload_size, void const *src,
-									 void const *dst, void *spd)
+static ipsec_lwip_action ipsec_lwip_output_common(unsigned char *packet, int packet_len,
+									   ipsec_lwip_adapter *adapter,
+									   struct pbuf **result,
+									   spd_entry **out_spd)
 {
-	return ipsec_output(packet, packet_len, payload_offset, payload_size,
-				   *((const __u32 *)src), *((const __u32 *)dst), spd);
-}
+	spd_entry *spd;
 
-static int ipsec_lwip_call_output_ipv6(unsigned char *packet, int packet_len, int *payload_offset,
-									 int *payload_size, void const *src,
-									 void const *dst, void *spd)
-{
-	return ipsec_output_ipv6(packet, packet_len, payload_offset, payload_size,
-					(const __u8 *)src, (const __u8 *)dst, spd);
+	spd = ipsec_spd_lookup(packet, &adapter->databases->outbound_spd);
+	if(spd == NULL)
+	{
+		if(result != NULL)
+		{
+			*result = NULL;
+		}
+		return IPSEC_LWIP_ACTION_ERROR;
+	}
+
+	if(spd->policy == POLICY_BYPASS)
+	{
+		if(result != NULL)
+		{
+			*result = NULL;
+		}
+		return IPSEC_LWIP_ACTION_BYPASS;
+	}
+
+	if(spd->policy == POLICY_DISCARD)
+	{
+		if(result != NULL)
+		{
+			*result = NULL;
+		}
+		return IPSEC_LWIP_ACTION_DISCARD;
+	}
+
+	*out_spd = spd;
+	return IPSEC_LWIP_ACTION_DELIVER;
 }
 
 ipsec_lwip_action ipsec_lwip_output_ipv4(struct pbuf *p, struct netif *netif,
@@ -357,11 +397,14 @@ ipsec_lwip_action ipsec_lwip_output_ipv4(struct pbuf *p, struct netif *netif,
 	ipsec_lwip_adapter *adapter;
 	unsigned char *packet;
 	int packet_len;
-	__u32 src_addr;
-	__u32 dst_addr;
+	int payload_offset;
+	int payload_size;
+	spd_entry *spd;
+	struct pbuf *output;
+	int status;
+	ipsec_lwip_action action;
 
-	adapter = ipsec_lwip_require_adapter(netif);
-
+	adapter = ipsec_lwip_adapter_get(netif);
 	if((adapter == NULL) || (adapter->databases == NULL) || (src == NULL) || (dst == NULL))
 	{
 		if(result != NULL)
@@ -371,7 +414,7 @@ ipsec_lwip_action ipsec_lwip_output_ipv4(struct pbuf *p, struct netif *netif,
 		return IPSEC_LWIP_ACTION_ERROR;
 	}
 
-	packet_len = ipsec_lwip_copy_to_buffer(p, adapter->work_buffer, IPSEC_LWIP_WORKBUF_HEADROOM, &packet);
+	packet_len = ipsec_lwip_copy_to_buffer(p, adapter, IPSEC_LWIP_WORKBUF_HEADROOM, &packet);
 	if(packet_len < 0)
 	{
 		if(result != NULL)
@@ -381,15 +424,42 @@ ipsec_lwip_action ipsec_lwip_output_ipv4(struct pbuf *p, struct netif *netif,
 		return IPSEC_LWIP_ACTION_ERROR;
 	}
 
-	src_addr = ip4_addr_get_u32(src);
-	dst_addr = ip4_addr_get_u32(dst);
-	/*
-	 * The IPv4 and IPv6 wrappers only adapt lwIP address types. The actual policy
-	 * and encapsulation path stays shared so AH/ESP and tunnel/transport mode use
-	 * the same hook contract.
-	 */
-	return ipsec_lwip_transform_output(packet, packet_len, adapter, ipsec_lwip_call_output_ipv4,
-					   &src_addr, &dst_addr, result);
+	spd = NULL;
+	action = ipsec_lwip_output_common(packet, packet_len, adapter, result, &spd);
+	if(action != IPSEC_LWIP_ACTION_DELIVER)
+	{
+		return action;
+	}
+
+	payload_offset = 0;
+	payload_size = 0;
+	status = ipsec_output(packet, packet_len, &payload_offset, &payload_size,
+				  ip4_addr_get_u32(src), ip4_addr_get_u32(dst), spd);
+	if(status != IPSEC_STATUS_SUCCESS)
+	{
+		if(result != NULL)
+		{
+			*result = NULL;
+		}
+		return IPSEC_LWIP_ACTION_ERROR;
+	}
+
+	output = ipsec_lwip_alloc_packet(packet + payload_offset, (u16_t)payload_size);
+	if(output == NULL)
+	{
+		if(result != NULL)
+		{
+			*result = NULL;
+		}
+		return IPSEC_LWIP_ACTION_ERROR;
+	}
+
+	if(result != NULL)
+	{
+		*result = output;
+	}
+
+	return IPSEC_LWIP_ACTION_DELIVER;
 }
 
 ipsec_lwip_action ipsec_lwip_output_ipv6(struct pbuf *p, struct netif *netif,
@@ -399,9 +469,14 @@ ipsec_lwip_action ipsec_lwip_output_ipv6(struct pbuf *p, struct netif *netif,
 	ipsec_lwip_adapter *adapter;
 	unsigned char *packet;
 	int packet_len;
+	int payload_offset;
+	int payload_size;
+	spd_entry *spd;
+	struct pbuf *output;
+	int status;
+	ipsec_lwip_action action;
 
-	adapter = ipsec_lwip_require_adapter(netif);
-
+	adapter = ipsec_lwip_adapter_get(netif);
 	if((adapter == NULL) || (adapter->databases == NULL) || (src == NULL) || (dst == NULL))
 	{
 		if(result != NULL)
@@ -411,7 +486,7 @@ ipsec_lwip_action ipsec_lwip_output_ipv6(struct pbuf *p, struct netif *netif,
 		return IPSEC_LWIP_ACTION_ERROR;
 	}
 
-	packet_len = ipsec_lwip_copy_to_buffer(p, adapter->work_buffer, IPSEC_LWIP_WORKBUF_HEADROOM, &packet);
+	packet_len = ipsec_lwip_copy_to_buffer(p, adapter, IPSEC_LWIP_WORKBUF_HEADROOM, &packet);
 	if(packet_len < 0)
 	{
 		if(result != NULL)
@@ -421,8 +496,42 @@ ipsec_lwip_action ipsec_lwip_output_ipv6(struct pbuf *p, struct netif *netif,
 		return IPSEC_LWIP_ACTION_ERROR;
 	}
 
-	return ipsec_lwip_transform_output(packet, packet_len, adapter, ipsec_lwip_call_output_ipv6,
-					   src, dst, result);
+	spd = NULL;
+	action = ipsec_lwip_output_common(packet, packet_len, adapter, result, &spd);
+	if(action != IPSEC_LWIP_ACTION_DELIVER)
+	{
+		return action;
+	}
+
+	payload_offset = 0;
+	payload_size = 0;
+	status = ipsec_output_ipv6(packet, packet_len, &payload_offset, &payload_size,
+					   (const __u8 *)src, (const __u8 *)dst, spd);
+	if(status != IPSEC_STATUS_SUCCESS)
+	{
+		if(result != NULL)
+		{
+			*result = NULL;
+		}
+		return IPSEC_LWIP_ACTION_ERROR;
+	}
+
+	output = ipsec_lwip_alloc_packet(packet + payload_offset, (u16_t)payload_size);
+	if(output == NULL)
+	{
+		if(result != NULL)
+		{
+			*result = NULL;
+		}
+		return IPSEC_LWIP_ACTION_ERROR;
+	}
+
+	if(result != NULL)
+	{
+		*result = output;
+	}
+
+	return IPSEC_LWIP_ACTION_DELIVER;
 }
 
 #endif

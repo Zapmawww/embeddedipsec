@@ -339,6 +339,98 @@ int test_spd_init(void)
 	return local_error_count ;
 }
 
+int test_spd_init_dbs(void)
+{
+	int local_error_count = 0;
+	db_set_netif databases = { 0 };
+	spd_entry inbound_spd_storage[IPSEC_MAX_SPD_ENTRIES] = { EMPTY_SPD_ENTRY };
+	spd_entry outbound_spd_storage[IPSEC_MAX_SPD_ENTRIES] = { EMPTY_SPD_ENTRY };
+	sad_entry inbound_sad_storage[IPSEC_MAX_SAD_ENTRIES] = { EMPTY_SAD_ENTRY };
+	sad_entry outbound_sad_storage[IPSEC_MAX_SAD_ENTRIES] = { EMPTY_SAD_ENTRY };
+	db_set_netif *initialized;
+
+	inbound_spd_storage[0].use_flag = IPSEC_USED;
+	inbound_spd_storage[2].use_flag = IPSEC_USED;
+	outbound_spd_storage[1].use_flag = IPSEC_USED;
+	inbound_sad_storage[1].use_flag = IPSEC_USED;
+	outbound_sad_storage[0].use_flag = IPSEC_USED;
+	outbound_sad_storage[3].use_flag = IPSEC_USED;
+
+	initialized = ipsec_spd_init_dbs(&databases,
+							 inbound_spd_storage,
+							 outbound_spd_storage,
+							 inbound_sad_storage,
+							 outbound_sad_storage);
+	if(initialized != &databases)
+	{
+		local_error_count++;
+		IPSEC_LOG_TST("test_spd_init_dbs", "FAILURE", ("ipsec_spd_init_dbs() did not return the caller-owned database set"));
+	}
+
+	if(databases.use_flag != IPSEC_USED)
+	{
+		local_error_count++;
+		IPSEC_LOG_TST("test_spd_init_dbs", "FAILURE", ("database set was not marked in use"));
+	}
+
+	if((databases.inbound_spd.size != IPSEC_MAX_SPD_ENTRIES) ||
+	   (databases.outbound_spd.size != IPSEC_MAX_SPD_ENTRIES))
+	{
+		local_error_count++;
+		IPSEC_LOG_TST("test_spd_init_dbs", "FAILURE", ("SPD table sizes were not initialized"));
+	}
+
+	if((databases.inbound_spd.first != &inbound_spd_storage[0]) ||
+	   (databases.inbound_spd.last != &inbound_spd_storage[2]))
+	{
+		local_error_count++;
+		IPSEC_LOG_TST("test_spd_init_dbs", "FAILURE", ("inbound SPD links were not rebuilt correctly"));
+	}
+
+	if((inbound_spd_storage[0].next != &inbound_spd_storage[2]) ||
+	   (inbound_spd_storage[2].prev != &inbound_spd_storage[0]))
+	{
+		local_error_count++;
+		IPSEC_LOG_TST("test_spd_init_dbs", "FAILURE", ("sparse inbound SPD entries were not linked together"));
+	}
+
+	if((databases.outbound_spd.first != &outbound_spd_storage[1]) ||
+	   (databases.outbound_spd.last != &outbound_spd_storage[1]))
+	{
+		local_error_count++;
+		IPSEC_LOG_TST("test_spd_init_dbs", "FAILURE", ("single outbound SPD entry was not linked correctly"));
+	}
+
+	if((databases.inbound_sad.first != &inbound_sad_storage[1]) ||
+	   (databases.inbound_sad.last != &inbound_sad_storage[1]) ||
+	   (databases.outbound_sad.first != &outbound_sad_storage[0]) ||
+	   (databases.outbound_sad.last != &outbound_sad_storage[3]))
+	{
+		local_error_count++;
+		IPSEC_LOG_TST("test_spd_init_dbs", "FAILURE", ("SAD links were not rebuilt correctly"));
+	}
+
+	if(ipsec_spd_release_dbs(&databases) != IPSEC_STATUS_SUCCESS)
+	{
+		local_error_count++;
+		IPSEC_LOG_TST("test_spd_init_dbs", "FAILURE", ("ipsec_spd_release_dbs() did not succeed on caller-owned storage"));
+	}
+
+	if((databases.use_flag != IPSEC_FREE) ||
+	   (databases.inbound_spd.table != NULL) ||
+	   (databases.outbound_spd.table != NULL) ||
+	   (databases.inbound_sad.table != NULL) ||
+	   (databases.outbound_sad.table != NULL) ||
+	   (databases.inbound_spd.size != 0) ||
+	   (databases.outbound_spd.size != 0))
+	{
+		local_error_count++;
+		IPSEC_LOG_TST("test_spd_init_dbs", "FAILURE", ("ipsec_spd_release_dbs() did not clear the database set"));
+	}
+
+	return local_error_count;
+}
+
 /**
  * Check if SPD lookup for free entries works.
  * 4 tests are performed here.
@@ -859,25 +951,283 @@ int test_sad_get_spi(void)
 
 int test_spd_flush(void)
 {
-	return IPSEC_STATUS_NOT_IMPLEMENTED ;
+	int local_error_count = 0;
+	spd_entry storage[IPSEC_MAX_SPD_ENTRIES] = { EMPTY_SPD_ENTRY };
+	spd_table table = { storage, NULL, NULL, IPSEC_MAX_SPD_ENTRIES };
+	spd_entry ipv4_default = EMPTY_SPD_ENTRY;
+	spd_entry ipv6_default = EMPTY_SPD_ENTRY;
+	__u8 ipv6_src[16] = { 0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x01 };
+	__u8 ipv6_dst[16] = { 0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x02 };
+	__u8 ipv6_mask[16] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
+
+	/* Seed the table with multiple entries so flush has real state to replace. */
+	ipsec_spd_add(ipsec_inet_addr("192.168.1.10"), ipsec_inet_addr("255.255.255.255"),
+			  ipsec_inet_addr("192.168.1.20"), ipsec_inet_addr("255.255.255.255"),
+			  IPSEC_PROTO_TCP, ipsec_htons(1234), ipsec_htons(4321), POLICY_APPLY, &table);
+	ipsec_spd_add(ipsec_inet_addr("10.0.0.0"), ipsec_inet_addr("255.0.0.0"),
+			  ipsec_inet_addr("0.0.0.0"), ipsec_inet_addr("0.0.0.0"),
+			  IPSEC_PROTO_UDP, 0, 0, POLICY_BYPASS, &table);
+
+	ipv4_default.src = ipsec_inet_addr("0.0.0.0");
+	ipv4_default.src_netaddr = ipsec_inet_addr("0.0.0.0");
+	ipv4_default.dest = ipsec_inet_addr("0.0.0.0");
+	ipv4_default.dest_netaddr = ipsec_inet_addr("0.0.0.0");
+	ipv4_default.protocol = 0;
+	ipv4_default.src_port = 0;
+	ipv4_default.dest_port = 0;
+	ipv4_default.policy = POLICY_BYPASS;
+
+	if(ipsec_spd_flush(&table, &ipv4_default) != IPSEC_STATUS_SUCCESS)
+	{
+		local_error_count++;
+		IPSEC_LOG_TST("test_spd_flush", "FAILURE", ("unable to flush IPv4 SPD table"));
+	}
+
+	if((table.first != &table.table[0]) || (table.last != &table.table[0]))
+	{
+		local_error_count++;
+		IPSEC_LOG_TST("test_spd_flush", "FAILURE", ("IPv4 flush did not rebuild a single-entry default list"));
+	}
+
+	if((table.table[0].policy != POLICY_BYPASS) || (table.table[0].use_flag != IPSEC_USED))
+	{
+		local_error_count++;
+		IPSEC_LOG_TST("test_spd_flush", "FAILURE", ("IPv4 flush did not install the default entry correctly"));
+	}
+
+	ipsec_spd_set_ipv6(&ipv6_default, ipv6_src, ipv6_mask, ipv6_dst, ipv6_mask);
+	ipv6_default.protocol = IPSEC_PROTO_TCP;
+	ipv6_default.src_port = ipsec_htons(1000);
+	ipv6_default.dest_port = ipsec_htons(2000);
+	ipv6_default.policy = POLICY_APPLY;
+
+	if(ipsec_spd_flush(&table, &ipv6_default) != IPSEC_STATUS_SUCCESS)
+	{
+		local_error_count++;
+		IPSEC_LOG_TST("test_spd_flush", "FAILURE", ("unable to flush IPv6 SPD table"));
+	}
+
+	if((table.first != &table.table[0]) || (table.last != &table.table[0]) || (table.table[0].addr_family != IPSEC_AF_INET6))
+	{
+		local_error_count++;
+		IPSEC_LOG_TST("test_spd_flush", "FAILURE", ("IPv6 flush did not rebuild a single IPv6 default entry"));
+	}
+
+	if((memcmp(table.table[0].src_ipv6, ipv6_src, sizeof(ipv6_src)) != 0) ||
+	   (memcmp(table.table[0].dest_ipv6, ipv6_dst, sizeof(ipv6_dst)) != 0) ||
+	   (table.table[0].policy != POLICY_APPLY))
+	{
+		local_error_count++;
+		IPSEC_LOG_TST("test_spd_flush", "FAILURE", ("IPv6 flush did not preserve the default entry fields"));
+	}
+
+	return local_error_count;
 }
 
 
 int test_sad_flush(void)
 {
-	return IPSEC_STATUS_NOT_IMPLEMENTED ;
+	int local_error_count = 0;
+	sad_entry storage[IPSEC_MAX_SAD_ENTRIES] = { EMPTY_SAD_ENTRY };
+	sad_table table = { storage, NULL, NULL };
+	sad_entry template = { EMPTY_SAD_ENTRY };
+	sad_entry *added;
+	int index;
+
+	template.dest = ipsec_inet_addr("192.168.1.20");
+	template.dest_netaddr = ipsec_inet_addr("255.255.255.255");
+	template.spi = ipsec_htonl(0x1001);
+	template.protocol = IPSEC_PROTO_AH;
+	template.mode = IPSEC_TRANSPORT;
+	template.replay_win = IPSEC_SEQ_MAX_WINDOW;
+	template.use_flag = IPSEC_USED;
+
+	added = ipsec_sad_add(&template, &table);
+	template.spi = ipsec_htonl(0x1002);
+	ipsec_sad_add(&template, &table);
+	if((added == NULL) || (table.first == NULL) || (table.last == NULL))
+	{
+		local_error_count++;
+		IPSEC_LOG_TST("test_sad_flush", "FAILURE", ("unable to seed SAD table before flush"));
+	}
+
+	if(ipsec_sad_flush(&table) != IPSEC_STATUS_SUCCESS)
+	{
+		local_error_count++;
+		IPSEC_LOG_TST("test_sad_flush", "FAILURE", ("unable to flush SAD table"));
+	}
+
+	if((table.first != NULL) || (table.last != NULL))
+	{
+		local_error_count++;
+		IPSEC_LOG_TST("test_sad_flush", "FAILURE", ("SAD flush did not clear list pointers"));
+	}
+
+	for(index = 0; index < IPSEC_MAX_SAD_ENTRIES; index++)
+	{
+		if(storage[index].use_flag != IPSEC_FREE)
+		{
+			local_error_count++;
+			IPSEC_LOG_TST("test_sad_flush", "FAILURE", ("SAD flush did not clear table entries"));
+			break;
+		}
+	}
+
+	added = ipsec_sad_add(&template, &table);
+	if((added != &storage[0]) || (table.first != &storage[0]) || (table.last != &storage[0]))
+	{
+		local_error_count++;
+		IPSEC_LOG_TST("test_sad_flush", "FAILURE", ("SAD table was not reusable after flush"));
+	}
+
+	return local_error_count;
 }
 
 
 int test_sad_add(void)
 {
-	return IPSEC_STATUS_NOT_IMPLEMENTED ;
+	int local_error_count = 0;
+	sad_entry storage[IPSEC_MAX_SAD_ENTRIES] = { EMPTY_SAD_ENTRY };
+	sad_table table = { storage, NULL, NULL };
+	sad_entry ipv4_template = { EMPTY_SAD_ENTRY };
+	sad_entry ipv6_template = { EMPTY_SAD_ENTRY };
+	sad_entry *first;
+	sad_entry *second;
+	__u8 ipv6_dest[16] = { 0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x20 };
+	__u8 ipv6_mask[16] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
+
+	ipv4_template.dest = ipsec_inet_addr("192.168.1.20");
+	ipv4_template.dest_netaddr = ipsec_inet_addr("255.255.255.255");
+	ipv4_template.spi = ipsec_htonl(0x1001);
+	ipv4_template.protocol = IPSEC_PROTO_AH;
+	ipv4_template.mode = IPSEC_TRANSPORT;
+	ipv4_template.sequence_number = 3;
+	ipv4_template.replay_win = IPSEC_SEQ_MAX_WINDOW;
+	ipv4_template.replay_last_seq = 2;
+	ipv4_template.replay_bitmap = 0x03;
+	ipv4_template.path_mtu = 1400;
+	ipv4_template.auth_alg = IPSEC_HMAC_SHA1;
+	memcpy(ipv4_template.authkey, "01234567890123456789", IPSEC_AUTH_SHA1_KEY_LEN);
+
+	first = ipsec_sad_add(&ipv4_template, &table);
+	if((first != &storage[0]) || (table.first != first) || (table.last != first))
+	{
+		local_error_count++;
+		IPSEC_LOG_TST("test_sad_add", "FAILURE", ("first SAD entry was not inserted at the head of the table"));
+	}
+
+	if((first == NULL) || (first->sequence_number != 3) || (first->replay_last_seq != 2) || (first->replay_bitmap != 0x03))
+	{
+		local_error_count++;
+		IPSEC_LOG_TST("test_sad_add", "FAILURE", ("first SAD entry did not preserve sequence or replay fields"));
+	}
+
+	ipv6_template = ipv4_template;
+	ipv6_template.spi = ipsec_htonl(0x1002);
+	ipsec_sad_set_ipv6(&ipv6_template, ipv6_dest, ipv6_mask);
+	second = ipsec_sad_add(&ipv6_template, &table);
+	if(second != &storage[1])
+	{
+		local_error_count++;
+		IPSEC_LOG_TST("test_sad_add", "FAILURE", ("second SAD entry did not use the next free table slot"));
+	}
+
+	if(table.last != second)
+	{
+		local_error_count++;
+		IPSEC_LOG_TST("test_sad_add", "FAILURE", ("second SAD entry did not update the table tail"));
+	}
+
+	if((second == NULL) || (second->prev != first) || (first->next != second))
+	{
+		local_error_count++;
+		IPSEC_LOG_TST("test_sad_add", "FAILURE", ("second SAD entry was not linked after the first entry"));
+	}
+
+	if((second == NULL) || (second->addr_family != IPSEC_AF_INET6) || (memcmp(second->dest_ipv6, ipv6_dest, sizeof(ipv6_dest)) != 0))
+	{
+		local_error_count++;
+		IPSEC_LOG_TST("test_sad_add", "FAILURE", ("IPv6 SAD fields were not preserved during insertion"));
+	}
+
+	return local_error_count;
 }
 
 
 int test_sad_del(void)
 {
-	return IPSEC_STATUS_NOT_IMPLEMENTED ;
+	int local_error_count = 0;
+	sad_entry storage[IPSEC_MAX_SAD_ENTRIES] = { EMPTY_SAD_ENTRY };
+	sad_table table = { storage, NULL, NULL };
+	sad_entry template = { EMPTY_SAD_ENTRY };
+	sad_entry *first;
+	sad_entry *second;
+	sad_entry *third;
+
+	template.dest = ipsec_inet_addr("192.168.1.20");
+	template.dest_netaddr = ipsec_inet_addr("255.255.255.255");
+	template.protocol = IPSEC_PROTO_AH;
+	template.mode = IPSEC_TRANSPORT;
+	template.replay_win = IPSEC_SEQ_MAX_WINDOW;
+
+	template.spi = ipsec_htonl(0x1001);
+	first = ipsec_sad_add(&template, &table);
+	template.spi = ipsec_htonl(0x1002);
+	second = ipsec_sad_add(&template, &table);
+	template.spi = ipsec_htonl(0x1003);
+	third = ipsec_sad_add(&template, &table);
+
+	if((first == NULL) || (second == NULL) || (third == NULL))
+	{
+		local_error_count++;
+		IPSEC_LOG_TST("test_sad_del", "FAILURE", ("unable to seed SAD table before deletion tests"));
+		return local_error_count;
+	}
+
+	if(ipsec_sad_del(second, &table) != IPSEC_STATUS_SUCCESS)
+	{
+		local_error_count++;
+		IPSEC_LOG_TST("test_sad_del", "FAILURE", ("unable to delete middle SAD entry"));
+	}
+
+	if((first->next != third) || (third->prev != first) || (second->use_flag != IPSEC_FREE))
+	{
+		local_error_count++;
+		IPSEC_LOG_TST("test_sad_del", "FAILURE", ("deleting the middle SAD entry did not relink the list"));
+	}
+
+	if(ipsec_sad_del(first, &table) != IPSEC_STATUS_SUCCESS)
+	{
+		local_error_count++;
+		IPSEC_LOG_TST("test_sad_del", "FAILURE", ("unable to delete first SAD entry"));
+	}
+
+	if((table.first != third) || (third->prev != NULL))
+	{
+		local_error_count++;
+		IPSEC_LOG_TST("test_sad_del", "FAILURE", ("deleting the first SAD entry did not advance the head"));
+	}
+
+	if(ipsec_sad_del(third, &table) != IPSEC_STATUS_SUCCESS)
+	{
+		local_error_count++;
+		IPSEC_LOG_TST("test_sad_del", "FAILURE", ("unable to delete last SAD entry"));
+	}
+
+	if((table.first != NULL) || (table.last != NULL))
+	{
+		local_error_count++;
+		IPSEC_LOG_TST("test_sad_del", "FAILURE", ("deleting the final SAD entry did not clear the table"));
+	}
+
+	if((ipsec_sad_del(second, &table) != IPSEC_STATUS_FAILURE) ||
+	   (ipsec_sad_del(storage - 1, &table) != IPSEC_STATUS_FAILURE))
+	{
+		local_error_count++;
+		IPSEC_LOG_TST("test_sad_del", "FAILURE", ("invalid SAD deletions were not rejected"));
+	}
+
+	return local_error_count;
 }
 
 /*
@@ -939,8 +1289,8 @@ int test_sad_replay_state(void)
 void sa_test(test_result *global_results)
 {
 	test_result 	sub_results	= {
-					 51, 			
-					 11,			
+					 88, 			
+					 13,			
 						  0, 			
 						  0, 		
 					};
@@ -950,6 +1300,9 @@ void sa_test(test_result *global_results)
 	retcode = test_spd_init() ;
 	IPSEC_TESTING_EVALUATE(retcode, sub_results, "sa_test_spd_init()", (" "));
 
+	retcode = test_spd_init_dbs() ;
+	IPSEC_TESTING_EVALUATE(retcode, sub_results, "sa_test_spd_init_dbs()", (" "));
+
 	retcode = test_spd_get_free() ;
 	IPSEC_TESTING_EVALUATE(retcode, sub_results, "sa_test_spd_free()", (" "));
 
@@ -958,6 +1311,9 @@ void sa_test(test_result *global_results)
 
 	retcode = test_spd_del() ;
 	IPSEC_TESTING_EVALUATE(retcode, sub_results, "sa_test_spd_del()", (" "));
+
+	retcode = test_spd_lookup() ;
+	IPSEC_TESTING_EVALUATE(retcode, sub_results, "sa_test_spd_lookup()", (" "));
 
 	retcode = test_sad_add() ;
 	IPSEC_TESTING_EVALUATE(retcode, sub_results, "sa_test_sad_add()", (" "));

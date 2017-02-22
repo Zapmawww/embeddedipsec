@@ -118,6 +118,90 @@ static __u8 ipsec_sad_entry_family(const sad_entry *entry)
 	return entry->addr_family == IPSEC_AF_INET6 ? IPSEC_AF_INET6 : IPSEC_AF_INET;
 }
 
+static void ipsec_spd_rebuild_table(spd_table *table)
+{
+	spd_entry *prev;
+	spd_entry *entry;
+	int index;
+
+	if((table == NULL) || (table->table == NULL))
+	{
+		return;
+	}
+
+	table->first = NULL;
+	table->last = NULL;
+	prev = NULL;
+
+	for(index = 0; index < table->size; index++)
+	{
+		entry = &table->table[index];
+		if(entry->use_flag != IPSEC_USED)
+		{
+			entry->next = NULL;
+			entry->prev = NULL;
+			continue;
+		}
+
+		if(table->first == NULL)
+		{
+			table->first = entry;
+		}
+
+		entry->prev = prev;
+		entry->next = NULL;
+		if(prev != NULL)
+		{
+			prev->next = entry;
+		}
+
+		prev = entry;
+		table->last = entry;
+	}
+}
+
+static void ipsec_sad_rebuild_table(sad_table *table)
+{
+	sad_entry *prev;
+	sad_entry *entry;
+	int index;
+
+	if((table == NULL) || (table->table == NULL))
+	{
+		return;
+	}
+
+	table->first = NULL;
+	table->last = NULL;
+	prev = NULL;
+
+	for(index = 0; index < IPSEC_MAX_SAD_ENTRIES; index++)
+	{
+		entry = &table->table[index];
+		if(entry->use_flag != IPSEC_USED)
+		{
+			entry->next = NULL;
+			entry->prev = NULL;
+			continue;
+		}
+
+		if(table->first == NULL)
+		{
+			table->first = entry;
+		}
+
+		entry->prev = prev;
+		entry->next = NULL;
+		if(prev != NULL)
+		{
+			prev->next = entry;
+		}
+
+		prev = entry;
+		table->last = entry;
+	}
+}
+
 static void ipsec_spd_entry_src_address(const spd_entry *entry, ipsec_ip_address *address)
 {
 	if(ipsec_spd_entry_family(entry) == IPSEC_AF_INET6)
@@ -233,12 +317,60 @@ static void ipsec_format_address(const ipsec_ip_address *address, char *buffer)
  * @return pointer to the initialized set of DB's if the setup was successful
  * @return NULL if loading failed
  */
+db_set_netif *ipsec_spd_init_dbs(db_set_netif *dbs, spd_entry *inbound_spd_data, spd_entry *outbound_spd_data, sad_entry *inbound_sad_data, sad_entry *outbound_sad_data)
+{
+	int index ;
+
+	IPSEC_LOG_TRC(IPSEC_TRACE_ENTER, 
+	              "ipsec_spd_init_dbs", 
+				  ("dbs=%p, inbound_spd_data=%p, outbound_spd_data=%p, inbound_sad_data=%p, outbound_sad_data=%p",
+			      (void *)dbs, (void *)inbound_spd_data, (void *)outbound_spd_data, (void *)inbound_sad_data, (void *)outbound_sad_data)
+				 );
+
+	if((dbs == NULL) || (inbound_spd_data == NULL) || (outbound_spd_data == NULL) ||
+	   (inbound_sad_data == NULL) || (outbound_sad_data == NULL))
+	{
+		IPSEC_LOG_TRC(IPSEC_TRACE_RETURN, "ipsec_spd_init_dbs", ("%p", (void *)NULL) );
+		return NULL;
+	}
+
+	dbs->inbound_spd.table = inbound_spd_data ;
+	dbs->inbound_spd.size = IPSEC_MAX_SPD_ENTRIES ;
+	dbs->outbound_spd.table = outbound_spd_data ;
+	dbs->outbound_spd.size = IPSEC_MAX_SPD_ENTRIES ;
+	dbs->inbound_sad.table = inbound_sad_data ;
+	dbs->outbound_sad.table = outbound_sad_data ;
+
+	dbs->use_flag = IPSEC_USED ;
+
+	for(index=0; index < IPSEC_MAX_SPD_ENTRIES; index++)
+		if(dbs->inbound_spd.table[index].use_flag != IPSEC_USED)
+			dbs->inbound_spd.table[index].use_flag = IPSEC_FREE ;
+
+	for(index=0; index < IPSEC_MAX_SPD_ENTRIES; index++)
+		if(dbs->outbound_spd.table[index].use_flag != IPSEC_USED)
+			dbs->outbound_spd.table[index].use_flag = IPSEC_FREE ;
+
+	for(index=0; index < IPSEC_MAX_SAD_ENTRIES; index++)
+		if(dbs->inbound_sad.table[index].use_flag != IPSEC_USED)
+			dbs->inbound_sad.table[index].use_flag = IPSEC_FREE ;
+
+	for(index=0; index < IPSEC_MAX_SAD_ENTRIES; index++)
+		if(dbs->outbound_sad.table[index].use_flag != IPSEC_USED)
+			dbs->outbound_sad.table[index].use_flag = IPSEC_FREE ;
+
+	ipsec_spd_rebuild_table(&dbs->inbound_spd);
+	ipsec_spd_rebuild_table(&dbs->outbound_spd);
+	ipsec_sad_rebuild_table(&dbs->inbound_sad);
+	ipsec_sad_rebuild_table(&dbs->outbound_sad);
+
+	IPSEC_LOG_TRC(IPSEC_TRACE_RETURN, "ipsec_spd_init_dbs", ("dbs = %p", (void *)dbs) );
+	return dbs ;
+}
+
 db_set_netif	*ipsec_spd_load_dbs(spd_entry *inbound_spd_data, spd_entry *outbound_spd_data, sad_entry *inbound_sad_data, sad_entry *outbound_sad_data)
 {
 	int netif ;
-	int index ;
-	spd_entry 	*sp, *sp_next, *sp_prev ;
-	sad_entry 	*sa, *sa_next, *sa_prev ;
 
 	IPSEC_LOG_TRC(IPSEC_TRACE_ENTER, 
 	              "ipsec_spd_load_dbs", 
@@ -263,177 +395,7 @@ db_set_netif	*ipsec_spd_load_dbs(spd_entry *inbound_spd_data, spd_entry *outboun
 		return NULL;
 	}
 
-	/* index points now the a free entry which is filled with the initialization data */
-	db_sets[netif].inbound_spd.table = inbound_spd_data ;
-	db_sets[netif].outbound_spd.table = outbound_spd_data ;
-	db_sets[netif].inbound_sad.table = inbound_sad_data ;
-	db_sets[netif].outbound_sad.table = outbound_sad_data ;
-
-	db_sets[netif].use_flag = IPSEC_USED ;
-
-	/* set none used entries from the tables to FREE */
-	for(index=0; index < IPSEC_MAX_SPD_ENTRIES; index++)
-		if(db_sets[netif].inbound_spd.table[index].use_flag != IPSEC_USED)
-			db_sets[netif].inbound_spd.table[index].use_flag = IPSEC_FREE ;
-
-	for(index=0; index < IPSEC_MAX_SPD_ENTRIES; index++)
-		if(db_sets[netif].inbound_sad.table[index].use_flag != IPSEC_USED)
-			db_sets[netif].inbound_sad.table[index].use_flag = IPSEC_FREE ;
-	
-	for(index=0; index < IPSEC_MAX_SAD_ENTRIES; index++)
-		if(db_sets[netif].outbound_spd.table[index].use_flag != IPSEC_USED)
-			db_sets[netif].outbound_spd.table[index].use_flag = IPSEC_FREE ;
-
-	for(index=0; index < IPSEC_MAX_SAD_ENTRIES; index++)
-		if(db_sets[netif].outbound_sad.table[index].use_flag != IPSEC_USED)
-			db_sets[netif].outbound_sad.table[index].use_flag = IPSEC_FREE ;
-
-	/*
-	 * Preloaded static entries remain in array order. The linked-list pointers are
-	 * rebuilt here so later add/delete operations can work without relocating the
-	 * underlying storage.
-	 */
-	/* link the database entries together */
-
-	/* inbound spd data */
-	sp = inbound_spd_data ;
-	/* if first entry is IPSEC_FREE, then there is nothing */
-	if(sp->use_flag == IPSEC_USED)
-	{
-		db_sets[netif].inbound_spd.first = sp ;	
-	
-		if ((sp+1)->use_flag == IPSEC_USED)
-		{
-			sp_next = (sp+1) ;
-		}
-		else
-		{
-			sp_next = NULL ;
-		}
-	
-		for(index=0, sp_prev=NULL;
-	 		(index < IPSEC_MAX_SPD_ENTRIES) && (sp[index+1].use_flag == IPSEC_USED);
-		    sp_prev = &sp[index], sp_next = &sp[index+2], index++)
-			{
-				sp[index].prev = sp_prev ;
-				sp[index].next = sp_next ;
-			}
-	
-			sp[index].next = NULL ;
-			db_sets[netif].inbound_spd.last = &sp[index] ;	
-	}
-	else
-	{
-		/* there was no data */
-		db_sets[netif].inbound_spd.first = NULL ;
-		db_sets[netif].inbound_spd.last = NULL ;
-	}
-
-	/* outbound spd data */
-	sp = outbound_spd_data ;
-	/* if first entry is IPSEC_FREE, then there is nothing */
-	if(sp->use_flag == IPSEC_USED)
-	{
-		db_sets[netif].outbound_spd.first = sp ;	
-	
-		if ((sp+1)->use_flag == IPSEC_USED)
-		{
-			sp_next = (sp+1) ;
-		}
-		else
-		{
-			sp_next = NULL ;
-		}
-	
-		for(index=0, sp_prev=NULL;
-	 		(index < IPSEC_MAX_SPD_ENTRIES) && (sp[index+1].use_flag == IPSEC_USED);
-		    sp_prev = &sp[index], sp_next = &sp[index+2], index++)
-			{
-				sp[index].prev = sp_prev ;
-				sp[index].next = sp_next ;
-			}
-	
-			sp[index].next = NULL ;
-			db_sets[netif].outbound_spd.last = &sp[index] ;	
-	}
-	else
-	{
-		/* there was no data */
-		db_sets[netif].outbound_spd.first = NULL ;
-		db_sets[netif].outbound_spd.last = NULL ;
-	}
-
-
-	/* inbound sad data */
-	sa = inbound_sad_data ;
-	/* if first entry is IPSEC_FREE, then there is nothing */
-	if(sa->use_flag == IPSEC_USED)
-	{
-		db_sets[netif].inbound_sad.first = sa ;	
-	
-		if ((sa+1)->use_flag == IPSEC_USED)
-		{
-			sa_next = (sa+1) ;
-		}
-		else
-		{
-			sa_next = NULL ;
-		}
-	
-		for(index=0, sa_prev=NULL;
-	 		(index < IPSEC_MAX_SAD_ENTRIES) && (sa[index+1].use_flag == IPSEC_USED);
-		    sa_prev = &sa[index], sa_next = &sa[index+2], index++)
-			{
-				sa[index].prev = sa_prev ;
-				sa[index].next = sa_next ;
-			}
-	
-			sa[index].next = NULL ;
-			db_sets[netif].inbound_sad.last = &sa[index] ;	
-	}
-	else
-	{
-		/* there was no data */
-		db_sets[netif].inbound_sad.first = NULL ;
-		db_sets[netif].inbound_sad.last = NULL ;
-	}
-
-	/* outbound sad data */
-	sa = outbound_sad_data ;
-	/* if first entry is IPSEC_FREE, then there is nothing */
-	if(sa->use_flag == IPSEC_USED)
-	{
-		db_sets[netif].outbound_sad.first = sa ;	
-	
-		if ((sa+1)->use_flag == IPSEC_USED)
-		{
-			sa_next = (sa+1) ;
-		}
-		else
-		{
-			sa_next = NULL ;
-		}
-	
-		for(index=0, sa_prev=NULL;
-	 		(index < IPSEC_MAX_SAD_ENTRIES) && (sa[index+1].use_flag == IPSEC_USED);
-		    sa_prev = &sa[index], sa_next = &sa[index+2], index++)
-			{
-				sa[index].prev = sa_prev ;
-				sa[index].next = sa_next ;
-			}
-	
-			sa[index].next = NULL ;
-			db_sets[netif].outbound_sad.last = &sa[index] ;	
-	}
-	else
-	{
-		/* there was no data */
-		db_sets[netif].outbound_sad.first = NULL ;
-		db_sets[netif].outbound_sad.last = NULL ;
-	}
-
-	IPSEC_LOG_TRC(IPSEC_TRACE_RETURN, "ipsec_spd_load_dbs", ("&db_sets[netif] = %p", &db_sets[netif]) );
-	return &db_sets[netif] ;
+	return ipsec_spd_init_dbs(&db_sets[netif], inbound_spd_data, outbound_spd_data, inbound_sad_data, outbound_sad_data) ;
 }
 
 /**
@@ -455,10 +417,12 @@ ipsec_status ipsec_spd_release_dbs(db_set_netif *dbs)
 	dbs->inbound_spd.first = NULL ;
 	dbs->inbound_spd.last = NULL ;
 	dbs->inbound_spd.table = NULL ;
+	dbs->inbound_spd.size = 0 ;
 
 	dbs->outbound_spd.first = NULL ;
 	dbs->outbound_spd.last = NULL ;
 	dbs->outbound_spd.table = NULL ;
+	dbs->outbound_spd.size = 0 ;
 
 	dbs->inbound_sad.first = NULL ;
 	dbs->inbound_sad.last = NULL ;
@@ -597,6 +561,7 @@ spd_entry *ipsec_spd_add(__u32 src, __u32 src_net, __u32 dst, __u32 dst_net, __u
 		free_entry->prev = tmp_entry ;
 		tmp_entry->next = free_entry ;
 		free_entry->next = NULL ;
+		table->last = free_entry ;
 	}
 
 	IPSEC_LOG_TRC(IPSEC_TRACE_RETURN, "ipsec_spd_add", ("free_entry=%p", (void *)free_entry) );
@@ -1041,6 +1006,7 @@ sad_entry *ipsec_sad_add(sad_entry *entry, sad_table *table)
 		free_entry->prev = tmp_entry ;
 		tmp_entry->next = free_entry ;
 		free_entry->next = NULL ;
+		table->last = free_entry ;
 	}
 
 	IPSEC_LOG_TRC(IPSEC_TRACE_RETURN, "ipsec_sad_add", ("free_entry = %p", (void *) free_entry) );

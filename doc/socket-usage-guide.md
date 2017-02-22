@@ -32,9 +32,9 @@ Because of that, IPsec configuration must happen in application code, system sta
 
 For each protected lwIP netif you need:
 
-1. One caller-owned `ipsec_lwip_adapter`.
-2. One caller-owned `db_set_netif` holding that interface's inbound and outbound SAD/SPD tables.
-3. One-time attachment of the adapter to the netif through `ipsec_lwip_adapter_attach()`.
+1. Either one caller-owned `ipsec_lwip_adapter` plus one caller-owned `db_set_netif`, or a single call to `ipsec_lwip_adapter_attach_malloc()`.
+2. Backing storage for inbound and outbound SAD/SPD tables, either caller-owned or heap-allocated by the helper.
+3. One-time attachment of the adapter to the netif.
 4. SPD entries that describe which socket traffic should be protected.
 5. Matching inbound and outbound SA entries carrying the SPI, mode, algorithms, and keys.
 
@@ -57,14 +57,13 @@ The socket API itself does not change. The SPD decides whether the traffic from 
 
 At system startup or interface bring-up time:
 
-1. Allocate one `ipsec_lwip_adapter` and one `db_set_netif` for each protected netif.
-2. Allocate storage arrays for inbound/outbound SPD and SAD tables.
-3. Call `ipsec_spd_load_dbs()` to initialize the database set.
-4. Add outbound and inbound SAs.
-5. Add outbound and inbound SPD entries and link them to the SAs with `ipsec_spd_add_sa()`.
-6. Reset inbound replay windows with `ipsec_sad_reset_replay()` whenever you install or rekey an inbound SA.
-7. Call `ipsec_lwip_adapter_attach(netif, &adapter, databases)` from lwIP core-locked context.
-8. Use normal sockets on that netif.
+1. Either allocate one `ipsec_lwip_adapter`, one `db_set_netif`, and four table arrays manually, or call `ipsec_lwip_adapter_attach_malloc(netif)`.
+2. Initialize the database set with `ipsec_spd_load_dbs()` or `ipsec_spd_init_dbs()` if you manage storage yourself. The heap helper still uses the static `db_set_netif` pool in [src/core/sa.c](src/core/sa.c).
+3. Add outbound and inbound SAs.
+4. Add outbound and inbound SPD entries and link them to the SAs with `ipsec_spd_add_sa()`.
+5. Reset inbound replay windows with `ipsec_sad_reset_replay()` whenever you install or rekey an inbound SA.
+6. Attach the adapter to the netif from lwIP core-locked context.
+7. Use normal sockets on that netif.
 
 ## Example: protect one TCP flow with IPv4 transport-mode AH
 
@@ -78,12 +77,6 @@ The following example shows the control-plane side. It provisions one outbound p
 #include "ipsec/sa.h"
 #include "ipsec/util.h"
 #include "netif/ipsec_lwip_adapter.h"
-
-static ipsec_lwip_adapter g_ipsec_adapter;
-static spd_entry g_inbound_spd_data[IPSEC_MAX_SPD_ENTRIES];
-static spd_entry g_outbound_spd_data[IPSEC_MAX_SPD_ENTRIES];
-static sad_entry g_inbound_sad_data[IPSEC_MAX_SAD_ENTRIES];
-static sad_entry g_outbound_sad_data[IPSEC_MAX_SAD_ENTRIES];
 
 static sad_entry g_outbound_sa;
 static sad_entry g_inbound_sa_template;
@@ -105,47 +98,42 @@ static void app_init_ah_sa(sad_entry *sa, __u32 peer_addr, __u32 spi)
 
 int app_ipsec_attach_ipv4_ah(struct netif *netif)
 {
+    ipsec_lwip_adapter *adapter;
     db_set_netif *databases;
     spd_entry *inbound_spd;
+    spd_entry *outbound_spd;
     sad_entry *inbound_sa;
-    spd_entry outbound_spd;
-
-    memset(g_inbound_spd_data, 0, sizeof(g_inbound_spd_data));
-    memset(g_outbound_spd_data, 0, sizeof(g_outbound_spd_data));
-    memset(g_inbound_sad_data, 0, sizeof(g_inbound_sad_data));
-    memset(g_outbound_sad_data, 0, sizeof(g_outbound_sad_data));
 
     app_init_ah_sa(&g_outbound_sa, ipsec_inet_addr("192.168.1.20"), 0x1001);
     app_init_ah_sa(&g_inbound_sa_template, ipsec_inet_addr("192.168.1.20"), 0x1001);
     ipsec_sad_reset_replay(&g_outbound_sa);
     ipsec_sad_reset_replay(&g_inbound_sa_template);
 
-    outbound_spd = (spd_entry){ SPD_ENTRY(
-        192,168,1,10, 255,255,255,255,
-        192,168,1,20, 255,255,255,255,
-        IPSEC_PROTO_TCP, 1234, 4321, POLICY_APPLY, 0) };
-    ipsec_spd_add_sa(&outbound_spd, &g_outbound_sa);
-
-    databases = ipsec_spd_load_dbs(g_inbound_spd_data, g_outbound_spd_data,
-                                   g_inbound_sad_data, g_outbound_sad_data);
-    if(databases == NULL)
+    adapter = ipsec_lwip_adapter_attach_malloc(netif);
+    if(adapter == NULL)
     {
         return -1;
     }
+
+    databases = adapter->databases;
 
     inbound_sa = ipsec_sad_add(&g_inbound_sa_template, &databases->inbound_sad);
     inbound_spd = ipsec_spd_add(ipsec_inet_addr("192.168.1.10"), ipsec_inet_addr("255.255.255.255"),
                                 ipsec_inet_addr("192.168.1.20"), ipsec_inet_addr("255.255.255.255"),
                                 IPSEC_PROTO_TCP, ipsec_htons(1234), ipsec_htons(4321), POLICY_APPLY,
                                 &databases->inbound_spd);
-    if((inbound_sa == NULL) || (inbound_spd == NULL))
+    outbound_spd = ipsec_spd_add(ipsec_inet_addr("192.168.1.10"), ipsec_inet_addr("255.255.255.255"),
+                                 ipsec_inet_addr("192.168.1.20"), ipsec_inet_addr("255.255.255.255"),
+                                 IPSEC_PROTO_TCP, ipsec_htons(1234), ipsec_htons(4321), POLICY_APPLY,
+                                 &databases->outbound_spd);
+    if((inbound_sa == NULL) || (inbound_spd == NULL) || (outbound_spd == NULL))
     {
-        ipsec_spd_release_dbs(databases);
+        ipsec_lwip_adapter_deinit(netif);
         return -1;
     }
 
+    ipsec_spd_add_sa(outbound_spd, &g_outbound_sa);
     ipsec_spd_add_sa(inbound_spd, inbound_sa);
-    ipsec_lwip_adapter_attach(netif, &g_ipsec_adapter, databases);
     return 0;
 }
 ```
@@ -218,7 +206,7 @@ If the application or control plane installs a new inbound SA:
 2. Link the matching SPD entry to the new SA.
 3. Call `ipsec_sad_reset_replay()` on the inbound SA before it starts receiving traffic.
 
-If you replace a database set entirely, re-attach the adapter with the new `db_set_netif *`.
+If you replace a database set entirely, re-attach the adapter with the new `db_set_netif *`, or call `ipsec_lwip_adapter_deinit(netif)` before creating a new heap-managed context.
 
 ## What to do if you want per-socket control
 
