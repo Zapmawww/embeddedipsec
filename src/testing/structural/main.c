@@ -73,6 +73,7 @@ extern void util_debug_test(test_result *);
 extern void des_test(test_result *);
 extern void md5_test(test_result *);
 extern void sha1_test(test_result *);
+extern void ipv6_test(test_result *);
 extern void sa_test(test_result *) ;
 extern void ah_test(test_result *) ;
 extern void esp_test(test_result *) ;
@@ -89,6 +90,7 @@ test_set test_function_set[] =
 			{ des_test, 		"des_test"			},
 			{ md5_test, 		"md5_test"			}, 
 			{ sha1_test,		"sha1_test"			},
+			{ ipv6_test,		"ipv6_test"			},
 			{ sa_test, 			"sa_test"			},
 			{ ah_test, 			"ah_test"			},
 			{ esp_test,			"esp_test"			}

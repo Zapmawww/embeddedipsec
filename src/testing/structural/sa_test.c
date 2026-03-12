@@ -216,15 +216,15 @@ int test_spd_init(void)
 	db_set_netif	*databases ;
 
 	/* init the config data */
-	memset(inbound_spd, 0, IPSEC_MAX_SPD_ENTRIES) ;
-	memset(outbound_spd, 0, IPSEC_MAX_SPD_ENTRIES) ;
-	memset(inbound_sad, 0, IPSEC_MAX_SAD_ENTRIES) ;
-	memset(outbound_sad, 0, IPSEC_MAX_SAD_ENTRIES) ;
+	memset(inbound_spd, 0, sizeof(inbound_spd)) ;
+	memset(outbound_spd, 0, sizeof(outbound_spd)) ;
+	memset(inbound_sad, 0, sizeof(inbound_sad)) ;
+	memset(outbound_sad, 0, sizeof(outbound_sad)) ;
 
-	memcpy(inbound_spd, inbound_spd_test, IPSEC_MAX_SPD_ENTRIES*sizeof(spd_entry)) ;
-	memcpy(outbound_spd, outbound_spd_test, IPSEC_MAX_SPD_ENTRIES*sizeof(spd_entry)) ;
-	memcpy(inbound_sad, inbound_sad_test, IPSEC_MAX_SAD_ENTRIES*sizeof(sad_entry)) ;
-	memcpy(outbound_sad, outbound_sad_test, IPSEC_MAX_SAD_ENTRIES*sizeof(sad_entry)) ;
+	memcpy(inbound_spd, inbound_spd_test, sizeof(inbound_spd_test)) ;
+	memcpy(outbound_spd, outbound_spd_test, sizeof(outbound_spd_test)) ;
+	memcpy(inbound_sad, inbound_sad_test, sizeof(inbound_sad_test)) ;
+	memcpy(outbound_sad, outbound_sad_test, sizeof(outbound_sad_test)) ;
 
 	/* init the table */
 	databases = ipsec_spd_load_dbs(inbound_spd, outbound_spd, inbound_sad, outbound_sad) ;
@@ -350,7 +350,7 @@ int test_spd_get_free(void)
 	db_set_netif	*databases ;
 
 	/* init the config data */
-	memset(inbound_spd, 0, IPSEC_MAX_SPD_ENTRIES) ;
+	memset(inbound_spd, 0, sizeof(inbound_spd)) ;
 
 	/* init the table */
 	databases = ipsec_spd_load_dbs(inbound_spd, outbound_spd, inbound_sad, outbound_sad) ;
@@ -432,15 +432,15 @@ int test_spd_add(void)
 		IPSEC_LOG_TST("test_spd_add", "WARNING", ("IPSEC_MAX_SA_ENTRIES may be too small for running test properly")) ;
 
 	/* init the config data */
-	memset(inbound_spd, 0, IPSEC_MAX_SPD_ENTRIES) ;
-	memset(outbound_spd, 0, IPSEC_MAX_SPD_ENTRIES) ;
-	memset(inbound_sad, 0, IPSEC_MAX_SAD_ENTRIES) ;
-	memset(outbound_sad, 0, IPSEC_MAX_SAD_ENTRIES) ;
+	memset(inbound_spd, 0, sizeof(inbound_spd)) ;
+	memset(outbound_spd, 0, sizeof(outbound_spd)) ;
+	memset(inbound_sad, 0, sizeof(inbound_sad)) ;
+	memset(outbound_sad, 0, sizeof(outbound_sad)) ;
 
-	memcpy(inbound_spd, inbound_spd_test, IPSEC_MAX_SPD_ENTRIES*sizeof(spd_entry)) ;
-	memcpy(outbound_spd, outbound_spd_test, IPSEC_MAX_SPD_ENTRIES*sizeof(spd_entry)) ;
-	memcpy(inbound_sad, inbound_sad_test, IPSEC_MAX_SAD_ENTRIES*sizeof(sad_entry)) ;
-	memcpy(outbound_sad, outbound_sad_test, IPSEC_MAX_SAD_ENTRIES*sizeof(sad_entry)) ;
+	memcpy(inbound_spd, inbound_spd_test, sizeof(inbound_spd_test)) ;
+	memcpy(outbound_spd, outbound_spd_test, sizeof(outbound_spd_test)) ;
+	memcpy(inbound_sad, inbound_sad_test, sizeof(inbound_sad_test)) ;
+	memcpy(outbound_sad, outbound_sad_test, sizeof(outbound_sad_test)) ;
 
 	/* init the table */
 	databases = ipsec_spd_load_dbs(inbound_spd, outbound_spd, inbound_sad, outbound_sad) ;
@@ -553,15 +553,15 @@ int test_spd_del(void)
 		IPSEC_LOG_TST("test_spd_del", "WARNING", ("IPSEC_MAX_SA_ENTRIES may be too small for running test properly")) ;
 
 	/* init the config data */
-	memset(inbound_spd, 0, IPSEC_MAX_SPD_ENTRIES) ;
-	memset(outbound_spd, 0, IPSEC_MAX_SPD_ENTRIES) ;
-	memset(inbound_sad, 0, IPSEC_MAX_SAD_ENTRIES) ;
-	memset(outbound_sad, 0, IPSEC_MAX_SAD_ENTRIES) ;
+	memset(inbound_spd, 0, sizeof(inbound_spd)) ;
+	memset(outbound_spd, 0, sizeof(outbound_spd)) ;
+	memset(inbound_sad, 0, sizeof(inbound_sad)) ;
+	memset(outbound_sad, 0, sizeof(outbound_sad)) ;
 
-	memcpy(inbound_spd, inbound_spd_test, IPSEC_MAX_SPD_ENTRIES*sizeof(spd_entry)) ;
-	memcpy(outbound_spd, outbound_spd_test, IPSEC_MAX_SPD_ENTRIES*sizeof(spd_entry)) ;
-	memcpy(inbound_sad, inbound_sad_test, IPSEC_MAX_SAD_ENTRIES*sizeof(sad_entry)) ;
-	memcpy(outbound_sad, outbound_sad_test, IPSEC_MAX_SAD_ENTRIES*sizeof(sad_entry)) ;
+	memcpy(inbound_spd, inbound_spd_test, sizeof(inbound_spd_test)) ;
+	memcpy(outbound_spd, outbound_spd_test, sizeof(outbound_spd_test)) ;
+	memcpy(inbound_sad, inbound_sad_test, sizeof(inbound_sad_test)) ;
+	memcpy(outbound_sad, outbound_sad_test, sizeof(outbound_sad_test)) ;
 
 	/* init the table */
 	databases = ipsec_spd_load_dbs(inbound_spd, outbound_spd, inbound_sad, outbound_sad) ;
@@ -707,15 +707,15 @@ int test_spd_lookup(void)
 	db_set_netif	*databases ;
 
 	/* init the config data */
-	memset(inbound_spd, 0, IPSEC_MAX_SPD_ENTRIES) ;
-	memset(outbound_spd, 0, IPSEC_MAX_SPD_ENTRIES) ;
-	memset(inbound_sad, 0, IPSEC_MAX_SAD_ENTRIES) ;
-	memset(outbound_sad, 0, IPSEC_MAX_SAD_ENTRIES) ;
+	memset(inbound_spd, 0, sizeof(inbound_spd)) ;
+	memset(outbound_spd, 0, sizeof(outbound_spd)) ;
+	memset(inbound_sad, 0, sizeof(inbound_sad)) ;
+	memset(outbound_sad, 0, sizeof(outbound_sad)) ;
 
-	memcpy(inbound_spd, inbound_spd_test, IPSEC_MAX_SPD_ENTRIES*sizeof(spd_entry)) ;
-	memcpy(outbound_spd, outbound_spd_test, IPSEC_MAX_SPD_ENTRIES*sizeof(spd_entry)) ;
-	memcpy(inbound_sad, inbound_sad_test, IPSEC_MAX_SAD_ENTRIES*sizeof(sad_entry)) ;
-	memcpy(outbound_sad, outbound_sad_test, IPSEC_MAX_SAD_ENTRIES*sizeof(sad_entry)) ;
+	memcpy(inbound_spd, inbound_spd_test, sizeof(inbound_spd_test)) ;
+	memcpy(outbound_spd, outbound_spd_test, sizeof(outbound_spd_test)) ;
+	memcpy(inbound_sad, inbound_sad_test, sizeof(inbound_sad_test)) ;
+	memcpy(outbound_sad, outbound_sad_test, sizeof(outbound_sad_test)) ;
 
 	/* init the table */
 	databases = ipsec_spd_load_dbs(inbound_spd, outbound_spd, inbound_sad, outbound_sad) ;	
@@ -781,15 +781,15 @@ int test_sad_lookup(void)
 	db_set_netif *databases ;
 
 	/* init the config data */
-	memset(inbound_spd, 0, IPSEC_MAX_SPD_ENTRIES) ;
-	memset(outbound_spd, 0, IPSEC_MAX_SPD_ENTRIES) ;
-	memset(inbound_sad, 0, IPSEC_MAX_SAD_ENTRIES) ;
-	memset(outbound_sad, 0, IPSEC_MAX_SAD_ENTRIES) ;
+	memset(inbound_spd, 0, sizeof(inbound_spd)) ;
+	memset(outbound_spd, 0, sizeof(outbound_spd)) ;
+	memset(inbound_sad, 0, sizeof(inbound_sad)) ;
+	memset(outbound_sad, 0, sizeof(outbound_sad)) ;
 
-	memcpy(inbound_spd, inbound_spd_test, IPSEC_MAX_SPD_ENTRIES*sizeof(spd_entry)) ;
-	memcpy(outbound_spd, outbound_spd_test, IPSEC_MAX_SPD_ENTRIES*sizeof(spd_entry)) ;
-	memcpy(inbound_sad, inbound_sad_test, IPSEC_MAX_SAD_ENTRIES*sizeof(sad_entry)) ;
-	memcpy(outbound_sad, outbound_sad_test, IPSEC_MAX_SAD_ENTRIES*sizeof(sad_entry)) ;
+	memcpy(inbound_spd, inbound_spd_test, sizeof(inbound_spd_test)) ;
+	memcpy(outbound_spd, outbound_spd_test, sizeof(outbound_spd_test)) ;
+	memcpy(inbound_sad, inbound_sad_test, sizeof(inbound_sad_test)) ;
+	memcpy(outbound_sad, outbound_sad_test, sizeof(outbound_sad_test)) ;
 
 	/* init the table */
 	databases = ipsec_spd_load_dbs(inbound_spd, outbound_spd, inbound_sad, outbound_sad) ;

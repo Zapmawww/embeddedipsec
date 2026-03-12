@@ -88,12 +88,20 @@ typedef enum ipsec_audit_list {					/** This value is returned if ... */
 
 
 typedef enum ipsec_ip_protocol_list {			/** IP protocol number for ... */
+	IPSEC_PROTO_IPIP				= 0x04,		/**<  IPv4 encapsulation */
 	IPSEC_PROTO_ICMP				= 0x01,		/**<  ICMP */
 	IPSEC_PROTO_TCP 				= 0x06, 	/**<  TCP  */
 	IPSEC_PROTO_UDP					= 0x11, 	/**<  UDP  */
+	IPSEC_PROTO_IPV6				= 0x29,		/**<  IPv6 encapsulation */
 	IPSEC_PROTO_ESP					= 0x32,		/**<  ESP  */
 	IPSEC_PROTO_AH					= 0x33		/**<  AH   */
 } ipsec_ip_protocol;
+
+
+#define IPSEC_AF_INET          (4)
+#define IPSEC_AF_INET6         (6)
+#define IPSEC_IPV4_HDR_SIZE    (20)
+#define IPSEC_IPV6_HDR_SIZE    (40)
 
 
 #if defined(_MSC_VER)
@@ -118,6 +126,22 @@ typedef struct ipsec_ip_hdr_struct
   __u32 src;				/**< source address                 */
   __u32 dest; 				/**< destination address            */
 } ipsec_ip_header;
+
+typedef struct ipsec_ipv6_hdr_struct
+{
+	__u32 v_tc_fl;			/**< version, traffic class, flow label */
+	__u16 payload_len;		/**< payload length excluding IPv6 header */
+	__u8  nexthdr;			/**< next header */
+	__u8  hop_limit;		/**< hop limit */
+	__u8  src[16];			/**< source address */
+	__u8  dest[16];			/**< destination address */
+} ipsec_ipv6_header;
+
+typedef struct ipsec_ip_address_struct
+{
+	__u8 family;
+	__u8 addr[16];
+} ipsec_ip_address;
 
 typedef struct ipsec_tcp_hdr_struct 
 {

@@ -43,6 +43,7 @@ if(EMBEDDEDIPSEC_BUILD_TESTS)
         src/testing/structural/ah_test.c
         src/testing/structural/des_test.c
         src/testing/structural/esp_test.c
+        src/testing/structural/ipv6_test.c
         src/testing/structural/main.c
         src/testing/structural/md5_test.c
         src/testing/structural/sa_test.c

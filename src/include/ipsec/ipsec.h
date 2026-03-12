@@ -68,5 +68,6 @@
 
 int ipsec_input(unsigned char *, int, int *, int *, void *);
 int ipsec_output(unsigned char *, int , int *, int *, __u32, __u32, void *);
+int ipsec_output_ipv6(unsigned char *, int, int *, int *, const __u8 *, const __u8 *, void *);
 
 #endif 

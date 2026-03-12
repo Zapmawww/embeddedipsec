@@ -60,6 +60,210 @@
 #include "ipsec/util.h"
 #include "ipsec/debug.h"
 
+static void ipsec_address_clear(ipsec_ip_address *address)
+{
+  if(address == NULL)
+  {
+    return;
+  }
+
+  address->family = 0;
+  memset(address->addr, 0, sizeof(address->addr));
+}
+
+void ipsec_address_set_ipv4(ipsec_ip_address *address, __u32 addr)
+{
+  ipsec_address_clear(address);
+  if(address == NULL)
+  {
+    return;
+  }
+
+  address->family = IPSEC_AF_INET;
+  memcpy(address->addr, &addr, sizeof(addr));
+}
+
+void ipsec_address_set_ipv6(ipsec_ip_address *address, const __u8 *addr)
+{
+  ipsec_address_clear(address);
+  if((address == NULL) || (addr == NULL))
+  {
+    return;
+  }
+
+  address->family = IPSEC_AF_INET6;
+  memcpy(address->addr, addr, 16);
+}
+
+int ipsec_address_maskcmp(const ipsec_ip_address *addr1, const ipsec_ip_address *addr2, const ipsec_ip_address *mask)
+{
+  int i;
+  int length;
+
+  if((addr1 == NULL) || (addr2 == NULL) || (mask == NULL))
+  {
+    return 0;
+  }
+
+  if((addr1->family != addr2->family) || (addr1->family != mask->family))
+  {
+    return 0;
+  }
+
+  length = addr1->family == IPSEC_AF_INET6 ? 16 : 4;
+  for(i = 0; i < length; i++)
+  {
+    if((addr1->addr[i] & mask->addr[i]) != (addr2->addr[i] & mask->addr[i]))
+    {
+      return 0;
+    }
+  }
+
+  return 1;
+}
+
+__u8 ipsec_packet_version(const void *packet)
+{
+  if(packet == NULL)
+  {
+    return 0;
+  }
+
+  return ((*((const __u8 *)packet)) >> 4) & 0x0F;
+}
+
+__u8 ipsec_packet_family(const void *packet)
+{
+  return ipsec_packet_version(packet) == 6 ? IPSEC_AF_INET6 : IPSEC_AF_INET;
+}
+
+int ipsec_packet_header_len(const void *packet)
+{
+  if(ipsec_packet_version(packet) == 6)
+  {
+    return IPSEC_IPV6_HDR_SIZE;
+  }
+
+  return ((((const ipsec_ip_header *)packet)->v_hl) & 0x0F) << 2;
+}
+
+int ipsec_packet_total_len(const void *packet)
+{
+  if(ipsec_packet_version(packet) == 6)
+  {
+    const ipsec_ipv6_header *ip6 = (const ipsec_ipv6_header *)packet;
+    return IPSEC_IPV6_HDR_SIZE + ipsec_ntohs(ip6->payload_len);
+  }
+
+  return ipsec_ntohs(((const ipsec_ip_header *)packet)->len);
+}
+
+void ipsec_packet_set_total_len(void *packet, int total_len)
+{
+  if(ipsec_packet_version(packet) == 6)
+  {
+    ipsec_ipv6_header *ip6 = (ipsec_ipv6_header *)packet;
+    ip6->payload_len = ipsec_htons((__u16)(total_len - IPSEC_IPV6_HDR_SIZE));
+    return;
+  }
+
+  ((ipsec_ip_header *)packet)->len = ipsec_htons((__u16)total_len);
+}
+
+__u8 ipsec_packet_protocol(const void *packet)
+{
+  if(ipsec_packet_version(packet) == 6)
+  {
+    return ((const ipsec_ipv6_header *)packet)->nexthdr;
+  }
+
+  return ((const ipsec_ip_header *)packet)->protocol;
+}
+
+void ipsec_packet_set_protocol(void *packet, __u8 protocol)
+{
+  if(ipsec_packet_version(packet) == 6)
+  {
+    ((ipsec_ipv6_header *)packet)->nexthdr = protocol;
+    return;
+  }
+
+  ((ipsec_ip_header *)packet)->protocol = protocol;
+}
+
+__u8 ipsec_packet_hop_limit(const void *packet)
+{
+  if(ipsec_packet_version(packet) == 6)
+  {
+    return ((const ipsec_ipv6_header *)packet)->hop_limit;
+  }
+
+  return ((const ipsec_ip_header *)packet)->ttl;
+}
+
+void ipsec_packet_set_hop_limit(void *packet, __u8 hop_limit)
+{
+  if(ipsec_packet_version(packet) == 6)
+  {
+    ((ipsec_ipv6_header *)packet)->hop_limit = hop_limit;
+    return;
+  }
+
+  ((ipsec_ip_header *)packet)->ttl = hop_limit;
+}
+
+void ipsec_packet_get_addresses(const void *packet, ipsec_ip_address *src, ipsec_ip_address *dst)
+{
+  if(ipsec_packet_version(packet) == 6)
+  {
+    const ipsec_ipv6_header *ip6 = (const ipsec_ipv6_header *)packet;
+    ipsec_address_set_ipv6(src, ip6->src);
+    ipsec_address_set_ipv6(dst, ip6->dest);
+    return;
+  }
+
+  ipsec_address_set_ipv4(src, ((const ipsec_ip_header *)packet)->src);
+  ipsec_address_set_ipv4(dst, ((const ipsec_ip_header *)packet)->dest);
+}
+
+void ipsec_packet_set_ipv4_addresses(void *packet, __u32 src, __u32 dst)
+{
+  ipsec_ip_header *ip = (ipsec_ip_header *)packet;
+  ip->src = src;
+  ip->dest = dst;
+}
+
+void ipsec_packet_set_ipv6_addresses(void *packet, const __u8 *src, const __u8 *dst)
+{
+  ipsec_ipv6_header *ip6 = (ipsec_ipv6_header *)packet;
+  memcpy(ip6->src, src, 16);
+  memcpy(ip6->dest, dst, 16);
+}
+
+void *ipsec_packet_payload(void *packet)
+{
+  return ((unsigned char *)packet) + ipsec_packet_header_len(packet);
+}
+
+const void *ipsec_packet_payload_const(const void *packet)
+{
+  return ((const unsigned char *)packet) + ipsec_packet_header_len(packet);
+}
+
+void ipsec_packet_zero_mutable_fields(void *packet)
+{
+  if(ipsec_packet_version(packet) == 6)
+  {
+    ((ipsec_ipv6_header *)packet)->hop_limit = 0;
+    return;
+  }
+
+  ((ipsec_ip_header *)packet)->tos = 0;
+  ((ipsec_ip_header *)packet)->offset = 0;
+  ((ipsec_ip_header *)packet)->ttl = 0;
+  ((ipsec_ip_header *)packet)->chksum = 0;
+}
+
 /**
  * Prints the header of an IP packet
  *
@@ -73,6 +277,58 @@ void ipsec_print_ip(ipsec_ip_header *header)
 	char	src[15+1] ;
 	char	dest[15+1] ;
 	__u16	len ;
+  ipsec_ipv6_header *ip6;
+  int i;
+  char *cursor;
+
+  if(ipsec_packet_version(header) == 6)
+  {
+    ip6 = (ipsec_ipv6_header *)header;
+    cursor = src;
+    for(i = 0; i < 4; i++)
+    {
+      cursor += sprintf(cursor, "%02x%02x", ip6->src[i * 2], ip6->src[(i * 2) + 1]);
+      if(i != 3)
+      {
+        *cursor++ = ':';
+      }
+    }
+    *cursor = 0;
+
+    cursor = dest;
+    for(i = 0; i < 4; i++)
+    {
+      cursor += sprintf(cursor, "%02x%02x", ip6->dest[i * 2], ip6->dest[(i * 2) + 1]);
+      if(i != 3)
+      {
+        *cursor++ = ':';
+      }
+    }
+    *cursor = 0;
+
+    len = (__u16)ipsec_packet_total_len(header);
+    switch(ip6->nexthdr)
+    {
+      case IPSEC_PROTO_TCP:
+        strcpy(port, " TCP");
+        break;
+      case IPSEC_PROTO_UDP:
+        strcpy(port, " UDP");
+        break;
+      case IPSEC_PROTO_AH:
+        strcpy(port, "  AH");
+        break;
+      case IPSEC_PROTO_ESP:
+        strcpy(port, " ESP");
+        break;
+      default:
+        strcpy(port, "????");
+    }
+
+    sprintf(log_message, "src6: %15s dest6: %15s protocol: %3s size: %d", src, dest, port, len);
+    printf("          %s\n", log_message);
+    return;
+  }
 
 	strcpy(src, ipsec_inet_ntoa(header->src)) ;
 	strcpy(dest, ipsec_inet_ntoa(header->dest)) ;

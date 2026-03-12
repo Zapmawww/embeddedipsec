@@ -61,6 +61,77 @@
 #include "ipsec/ah.h"
 #include "ipsec/esp.h"
 
+static int ipsec_output_common(unsigned char *packet, int packet_size, int *payload_offset, int *payload_size,
+						   spd_entry *spd, __u8 outer_family, const void *src, const void *dst)
+{
+	int ret_val = IPSEC_STATUS_NOT_INITIALIZED;
+	int total_len;
+
+	if(packet == NULL)
+	{
+		return IPSEC_STATUS_BAD_PACKET;
+	}
+
+	total_len = ipsec_packet_total_len(packet);
+	if(total_len > packet_size)
+	{
+		IPSEC_LOG_DBG("ipsec_output", IPSEC_STATUS_NOT_IMPLEMENTED,
+				("bad packet packet=%p, len=%d (must not be >%d bytes)", (void *)packet, total_len, packet_size) );
+		return IPSEC_STATUS_BAD_PACKET;
+	}
+
+	if((spd == NULL) || (spd->sa == NULL))
+	{
+		IPSEC_LOG_DBG("ipsec_output", IPSEC_STATUS_NOT_IMPLEMENTED, ("unable to generate dynamically an SA (IKE not implemented)") );
+		IPSEC_LOG_AUD("ipsec_output", IPSEC_STATUS_NO_SA_FOUND, ("no SA or SPD defined")) ;
+		return IPSEC_STATUS_NO_SA_FOUND;
+	}
+
+	switch(spd->sa->protocol) {
+		case IPSEC_PROTO_AH:
+			IPSEC_LOG_MSG("ipsec_output", ("have to encapsulate an AH packet")) ;
+			if(outer_family == IPSEC_AF_INET6)
+			{
+				ret_val = ipsec_ah_encapsulate_ipv6(packet, payload_offset, payload_size, spd->sa,
+											 (const __u8 *)src, (const __u8 *)dst);
+			}
+			else
+			{
+				ret_val = ipsec_ah_encapsulate((ipsec_ip_header *)packet, payload_offset, payload_size, spd->sa,
+								   *((const __u32 *)src), *((const __u32 *)dst));
+			}
+			if(ret_val != IPSEC_STATUS_SUCCESS)
+			{
+				IPSEC_LOG_ERR("ipsec_output", ret_val, ("ipsec_ah_encapsulate() failed"));
+			}
+			break;
+
+		case IPSEC_PROTO_ESP:
+			IPSEC_LOG_MSG("ipsec_output", ("have to encapsulate an ESP packet")) ;
+			if(outer_family == IPSEC_AF_INET6)
+			{
+				ret_val = ipsec_esp_encapsulate_ipv6(packet, payload_offset, payload_size, spd->sa,
+											  (const __u8 *)src, (const __u8 *)dst);
+			}
+			else
+			{
+				ret_val = ipsec_esp_encapsulate((ipsec_ip_header *)packet, payload_offset, payload_size, spd->sa,
+									 *((const __u32 *)src), *((const __u32 *)dst));
+			}
+			if(ret_val != IPSEC_STATUS_SUCCESS)
+			{
+				IPSEC_LOG_ERR("ipsec_output", ret_val, ("ipsec_esp_encapsulate() failed"));
+			}
+			break;
+
+		default:
+			ret_val = IPSEC_STATUS_BAD_PROTOCOL;
+			IPSEC_LOG_ERR("ipsec_output", ret_val, ("unsupported protocol '%d' in spd->sa->protocol", spd->sa->protocol));
+	}
+
+	return ret_val;
+}
+
 
 
 /**
@@ -86,8 +157,8 @@ int ipsec_input(unsigned char *packet, int packet_size,
 	int dummy   	= packet_size; 					/* dummy operation to avoid compiler warnings */
 	sad_entry 		*sa ;
 	spd_entry		*spd ;
-	ipsec_ip_header	*ip ;
-	ipsec_ip_header	*inner_ip ;
+	void			*inner_ip ;
+	ipsec_ip_address dest_addr;
 	__u32			spi ;
 
 	IPSEC_LOG_TRC(IPSEC_TRACE_ENTER, 
@@ -96,11 +167,16 @@ int ipsec_input(unsigned char *packet, int packet_size,
 			      (void *)packet, packet_size, (int)*payload_offset, (int)*payload_size, (void *)databases)
 				 );
 
+	if(packet == NULL)
+	{
+		return IPSEC_STATUS_BAD_PACKET;
+	}
+
 	IPSEC_DUMP_BUFFER(" INBOUND ESP or AH:", packet, 0, packet_size);
 	
-	ip = (ipsec_ip_header*)packet ;
-	spi = ipsec_sad_get_spi(ip) ;
-	sa = ipsec_sad_lookup(ip->dest, ip->protocol, spi, &databases->inbound_sad) ;
+	spi = ipsec_sad_get_spi(packet) ;
+	ipsec_packet_get_addresses(packet, NULL, &dest_addr);
+	sa = ipsec_sad_lookup_addr(&dest_addr, ipsec_packet_protocol(packet), spi, &databases->inbound_sad) ;
 
 	if(sa == NULL)
 	{
@@ -118,7 +194,7 @@ int ipsec_input(unsigned char *packet, int packet_size,
 
 	if(sa->protocol == IPSEC_PROTO_AH)
 	{
-		ret_val = ipsec_ah_check((ipsec_ip_header *)packet, payload_offset, payload_size, sa);
+		ret_val = ipsec_ah_check(packet, payload_offset, payload_size, sa);
 		if(ret_val != IPSEC_STATUS_SUCCESS) 
 		{
 			IPSEC_LOG_ERR("ipsec_input", ret_val, ("ah_packet_check() failed") );
@@ -128,7 +204,7 @@ int ipsec_input(unsigned char *packet, int packet_size,
 
 	} else if (sa->protocol == IPSEC_PROTO_ESP)
 	{
-		ret_val = ipsec_esp_decapsulate((ipsec_ip_header *)packet, payload_offset, payload_size, sa);
+		ret_val = ipsec_esp_decapsulate(packet, payload_offset, payload_size, sa);
 		if(ret_val != IPSEC_STATUS_SUCCESS) 
 		{
 			IPSEC_LOG_ERR("ipsec_input", ret_val, ("ipsec_esp_decapsulate() failed") );
@@ -143,7 +219,7 @@ int ipsec_input(unsigned char *packet, int packet_size,
 		return IPSEC_STATUS_FAILURE;
 	}
 
-	inner_ip = (ipsec_ip_header *)(((unsigned char *)ip) + *payload_offset) ;
+	inner_ip = (void *)(packet + *payload_offset) ;
 
 	spd = ipsec_spd_lookup(inner_ip, &databases->inbound_spd) ;
 	if(spd == NULL)
@@ -193,8 +269,7 @@ int ipsec_input(unsigned char *packet, int packet_size,
 int ipsec_output(unsigned char *packet, int packet_size, int *payload_offset, int *payload_size,
                  __u32 src, __u32 dst, spd_entry *spd)
 {
-	int ret_val = IPSEC_STATUS_NOT_INITIALIZED;		/* by default, the return value is undefined */
-	ipsec_ip_header		*ip ;
+	int ret_val;
 
 	IPSEC_LOG_TRC(IPSEC_TRACE_ENTER, 
 	              "ipsec_output", 
@@ -202,53 +277,26 @@ int ipsec_output(unsigned char *packet, int packet_size, int *payload_offset, in
 			      (void *)packet, packet_size, *payload_offset, *payload_size, (__u32) src, (__u32) dst, (void *)spd)
 				 );
 
-	ip = (ipsec_ip_header*)packet;
-
-	if((ip == NULL) || (ipsec_ntohs(ip->len) > packet_size)) 
-	{
-		IPSEC_LOG_DBG("ipsec_output", IPSEC_STATUS_NOT_IMPLEMENTED, ("bad packet ip=%p, ip->len=%d (must not be >%d bytes)", (void *)ip, ipsec_ntohs(ip->len), packet_size) );
-
-		IPSEC_LOG_TRC(IPSEC_TRACE_RETURN, "ipsec_output", ("return = %d", IPSEC_STATUS_BAD_PACKET) );
- 	    return IPSEC_STATUS_BAD_PACKET;
-	}
-	
-	if((spd == NULL) || (spd->sa == NULL))
-	{
-		/** @todo invoke IKE to generate a proper SA for this SPD entry */
-		IPSEC_LOG_DBG("ipsec_output", IPSEC_STATUS_NOT_IMPLEMENTED, ("unable to generate dynamically an SA (IKE not implemented)") );
-
-		IPSEC_LOG_AUD("ipsec_output", IPSEC_STATUS_NO_SA_FOUND, ("no SA or SPD defined")) ;
-		IPSEC_LOG_TRC(IPSEC_TRACE_RETURN, "ipsec_output", ("return = %d", IPSEC_STATUS_NO_SA_FOUND) );
- 	    return IPSEC_STATUS_NO_SA_FOUND;
-	}
-
-	switch(spd->sa->protocol) {
-		case IPSEC_PROTO_AH:
-				IPSEC_LOG_MSG("ipsec_output", ("have to encapsulate an AH packet")) ;
-				ret_val = ipsec_ah_encapsulate((ipsec_ip_header *)packet, payload_offset, payload_size, spd->sa, src, dst);
-		
-				if(ret_val != IPSEC_STATUS_SUCCESS) 
-				{
-					IPSEC_LOG_ERR("ipsec_output", ret_val, ("ipsec_ah_encapsulate() failed"));
-				}
-			break;
-
-		case IPSEC_PROTO_ESP:
-				IPSEC_LOG_MSG("ipsec_output", ("have to encapsulate an ESP packet")) ;
-				ret_val = ipsec_esp_encapsulate((ipsec_ip_header *)packet, payload_offset, payload_size, spd->sa, src, dst);
-			
-				if(ret_val != IPSEC_STATUS_SUCCESS) 
-				{
-					IPSEC_LOG_ERR("ipsec_output", ret_val, ("ipsec_esp_encapsulate() failed"));
-				}
-			break;
-
-		default:
-				ret_val = IPSEC_STATUS_BAD_PROTOCOL;
-				IPSEC_LOG_ERR("ipsec_output", ret_val, ("unsupported protocol '%d' in spd->sa->protocol", spd->sa->protocol));
-	}
+	ret_val = ipsec_output_common(packet, packet_size, payload_offset, payload_size, spd, IPSEC_AF_INET, &src, &dst);
 
 	IPSEC_LOG_TRC(IPSEC_TRACE_RETURN, "ipsec_output", ("ret_val=%d", ret_val) );
+	return ret_val;
+}
+
+int ipsec_output_ipv6(unsigned char *packet, int packet_size, int *payload_offset, int *payload_size,
+					 const __u8 *src, const __u8 *dst, spd_entry *spd)
+{
+	int ret_val;
+
+	IPSEC_LOG_TRC(IPSEC_TRACE_ENTER,
+	              "ipsec_output_ipv6",
+				  ("*packet=%p, packet_size=%d, *payload_offset=%d, *payload_size=%d src=%p dst=%p *spd=%p",
+			      (void *)packet, packet_size, *payload_offset, *payload_size, (const void *)src, (const void *)dst, (void *)spd)
+				 );
+
+	ret_val = ipsec_output_common(packet, packet_size, payload_offset, payload_size, spd, IPSEC_AF_INET6, src, dst);
+
+	IPSEC_LOG_TRC(IPSEC_TRACE_RETURN, "ipsec_output_ipv6", ("ret_val=%d", ret_val) );
 	return ret_val;
 }
 

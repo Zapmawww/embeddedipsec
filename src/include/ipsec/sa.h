@@ -94,6 +94,9 @@ struct sa_entry_struct
 	sad_entry	*next ;							/**< pointer to the next SAD entry */
 	sad_entry	*prev ;							/**< pointer to the previous SAD entry */
 	__u8		use_flag ;						/**< this flag defines if the SAD entry is still used or not */
+	__u8		addr_family ;					/**< IPSEC_AF_INET or IPSEC_AF_INET6 */
+	__u8		dest_ipv6[16] ;				/**< IPv6 destination address */
+	__u8		dest_netaddr_ipv6[16] ;		/**< IPv6 destination prefix mask */
 	/**@todo IV for cbc-mode should be added to this structure */
 	/**@todo enc_alg and auth_alg should be replced by function pointers */
 };
@@ -117,6 +120,11 @@ struct spd_entry_struct
 	spd_entry	*next ;			/**< pointer to the next table entry*/
 	spd_entry	*prev ;			/**< pointer to the previous table entry */
 	__u8		use_flag ; 		/**< tells whether the entry is free or not */
+	__u8		addr_family ;	/**< IPSEC_AF_INET or IPSEC_AF_INET6 */
+	__u8		src_ipv6[16] ;	/**< IPv6 source address */
+	__u8		src_netaddr_ipv6[16] ;	/**< IPv6 source prefix mask */
+	__u8		dest_ipv6[16] ;	/**< IPv6 destination address */
+	__u8		dest_netaddr_ipv6[16] ;/**< IPv6 destination prefix mask */
 };
 
 /** \struct spd_table_struct
@@ -198,7 +206,13 @@ ipsec_status ipsec_spd_del(spd_entry *entry, spd_table *table) ;
 
 ipsec_status ipsec_spd_add_sa(spd_entry *entry, sad_entry *sa) ;
 
-spd_entry *ipsec_spd_lookup(ipsec_ip_header *header, spd_table *table) ;
+void ipsec_spd_set_ipv6(spd_entry *entry, const __u8 *src, const __u8 *src_net, const __u8 *dst, const __u8 *dst_net) ;
+
+spd_entry *ipsec_spd_add_ipv6(const __u8 *src, const __u8 *src_net, const __u8 *dst,
+							  const __u8 *dst_net, __u8 proto, __u16 src_port,
+							  __u16 dst_port, __u8 policy, spd_table *table) ;
+
+spd_entry *ipsec_spd_lookup(void *header, spd_table *table) ;
 
 void ipsec_spd_print_single(spd_entry *entry) ;
 
@@ -209,15 +223,19 @@ sad_entry *ipsec_sad_get_free(sad_table *table) ;
 
 sad_entry *ipsec_sad_add(sad_entry *entry, sad_table *table) ;
 
+void ipsec_sad_set_ipv6(sad_entry *entry, const __u8 *dest, const __u8 *dest_net) ;
+
 ipsec_status ipsec_sad_del(sad_entry *entry, sad_table *table) ;
 
 sad_entry *ipsec_sad_lookup(__u32 dest, __u8 proto, __u32 spi, sad_table *table) ;
+
+sad_entry *ipsec_sad_lookup_addr(const ipsec_ip_address *dest, __u8 proto, __u32 spi, sad_table *table) ;
 
 void ipsec_sad_print_single(sad_entry *entry) ;
 
 void ipsec_sad_print(sad_table *table) ;
 
-__u32 ipsec_sad_get_spi(ipsec_ip_header *header) ;
+__u32 ipsec_sad_get_spi(void *header) ;
 
 ipsec_status ipsec_spd_flush(spd_table *table, spd_entry *def_entry) ;
 

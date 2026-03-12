@@ -74,8 +74,29 @@ __u32 ipsec_inet_addr(const char *cp) ;
 int ipsec_inet_aton(const char *cp, struct ipsec_in_addr *addr) ;
 __u8 *ipsec_inet_ntoa(__u32 addr) ;
 
+void ipsec_address_set_ipv4(ipsec_ip_address *address, __u32 addr);
+void ipsec_address_set_ipv6(ipsec_ip_address *address, const __u8 *addr);
+int ipsec_address_maskcmp(const ipsec_ip_address *addr1, const ipsec_ip_address *addr2, const ipsec_ip_address *mask);
+
 #define ipsec_ip_addr_maskcmp(addr1, addr2, mask) ((addr1 & mask) == (addr2 & mask ))
 #define ipsec_ip_addr_cmp(addr1, addr2) (addr1 == addr2)
+
+
+__u8 ipsec_packet_version(const void *packet);
+__u8 ipsec_packet_family(const void *packet);
+int ipsec_packet_header_len(const void *packet);
+int ipsec_packet_total_len(const void *packet);
+void ipsec_packet_set_total_len(void *packet, int total_len);
+__u8 ipsec_packet_protocol(const void *packet);
+void ipsec_packet_set_protocol(void *packet, __u8 protocol);
+__u8 ipsec_packet_hop_limit(const void *packet);
+void ipsec_packet_set_hop_limit(void *packet, __u8 hop_limit);
+void ipsec_packet_get_addresses(const void *packet, ipsec_ip_address *src, ipsec_ip_address *dst);
+void ipsec_packet_set_ipv4_addresses(void *packet, __u32 src, __u32 dst);
+void ipsec_packet_set_ipv6_addresses(void *packet, const __u8 *src, const __u8 *dst);
+void *ipsec_packet_payload(void *packet);
+const void *ipsec_packet_payload_const(const void *packet);
+void ipsec_packet_zero_mutable_fields(void *packet);
 
 
 

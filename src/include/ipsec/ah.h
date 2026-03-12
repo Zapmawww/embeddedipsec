@@ -64,8 +64,9 @@ typedef struct ah_hdr_struct
 extern __u32 ipsec_ah_bitmap; 			/**< bitmap used for anti-replay service */
 extern __u32 ipsec_ah_lastSeq;			/**< last seen sequence number, used for anit-replay service */
 
-int ipsec_ah_check(ipsec_ip_header *, int *, int *, void *);
+int ipsec_ah_check(void *, int *, int *, void *);
 int ipsec_ah_encapsulate(ipsec_ip_header *, int *, int *, void *, __u32, __u32);
+int ipsec_ah_encapsulate_ipv6(void *, int *, int *, void *, const __u8 *, const __u8 *);
 
 #endif
 

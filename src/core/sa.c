@@ -107,6 +107,105 @@ typedef struct ipsec_in_ip_struct /**< IPsec in IP structure - used to access he
 	} inner_header ;	
 } ipsec_in_ip ;
 
+static __u8 ipsec_spd_entry_family(const spd_entry *entry)
+{
+	return entry->addr_family == IPSEC_AF_INET6 ? IPSEC_AF_INET6 : IPSEC_AF_INET;
+}
+
+static __u8 ipsec_sad_entry_family(const sad_entry *entry)
+{
+	return entry->addr_family == IPSEC_AF_INET6 ? IPSEC_AF_INET6 : IPSEC_AF_INET;
+}
+
+static void ipsec_spd_entry_src_address(const spd_entry *entry, ipsec_ip_address *address)
+{
+	if(ipsec_spd_entry_family(entry) == IPSEC_AF_INET6)
+	{
+		ipsec_address_set_ipv6(address, entry->src_ipv6);
+		return;
+	}
+
+	ipsec_address_set_ipv4(address, entry->src);
+}
+
+static void ipsec_spd_entry_src_mask(const spd_entry *entry, ipsec_ip_address *address)
+{
+	if(ipsec_spd_entry_family(entry) == IPSEC_AF_INET6)
+	{
+		ipsec_address_set_ipv6(address, entry->src_netaddr_ipv6);
+		return;
+	}
+
+	ipsec_address_set_ipv4(address, entry->src_netaddr);
+}
+
+static void ipsec_spd_entry_dest_address(const spd_entry *entry, ipsec_ip_address *address)
+{
+	if(ipsec_spd_entry_family(entry) == IPSEC_AF_INET6)
+	{
+		ipsec_address_set_ipv6(address, entry->dest_ipv6);
+		return;
+	}
+
+	ipsec_address_set_ipv4(address, entry->dest);
+}
+
+static void ipsec_spd_entry_dest_mask(const spd_entry *entry, ipsec_ip_address *address)
+{
+	if(ipsec_spd_entry_family(entry) == IPSEC_AF_INET6)
+	{
+		ipsec_address_set_ipv6(address, entry->dest_netaddr_ipv6);
+		return;
+	}
+
+	ipsec_address_set_ipv4(address, entry->dest_netaddr);
+}
+
+static void ipsec_sad_entry_dest_address(const sad_entry *entry, ipsec_ip_address *address)
+{
+	if(ipsec_sad_entry_family(entry) == IPSEC_AF_INET6)
+	{
+		ipsec_address_set_ipv6(address, entry->dest_ipv6);
+		return;
+	}
+
+	ipsec_address_set_ipv4(address, entry->dest);
+}
+
+static void ipsec_sad_entry_dest_mask(const sad_entry *entry, ipsec_ip_address *address)
+{
+	if(ipsec_sad_entry_family(entry) == IPSEC_AF_INET6)
+	{
+		ipsec_address_set_ipv6(address, entry->dest_netaddr_ipv6);
+		return;
+	}
+
+	ipsec_address_set_ipv4(address, entry->dest_netaddr);
+}
+
+static void ipsec_format_address(const ipsec_ip_address *address, char *buffer)
+{
+	int i;
+	char *cursor;
+
+	if(address->family == IPSEC_AF_INET6)
+	{
+		cursor = buffer;
+		for(i = 0; i < 8; i++)
+		{
+			cursor += sprintf(cursor, "%02x%02x", address->addr[i * 2], address->addr[(i * 2) + 1]);
+			if(i != 7)
+			{
+				*cursor++ = ':';
+			}
+		}
+		*cursor = 0;
+		return;
+	}
+
+	strcpy(buffer, ipsec_inet_ntoa(*((__u32 *)address->addr)));
+}
+
 
 
 /**
@@ -456,6 +555,11 @@ spd_entry *ipsec_spd_add(__u32 src, __u32 src_net, __u32 dst, __u32 dst_net, __u
 	free_entry->src_port = src_port ;
 	free_entry->dest_port = dst_port ;
 	free_entry->policy = policy ;
+	free_entry->addr_family = IPSEC_AF_INET ;
+	memset(free_entry->src_ipv6, 0, sizeof(free_entry->src_ipv6));
+	memset(free_entry->src_netaddr_ipv6, 0, sizeof(free_entry->src_netaddr_ipv6));
+	memset(free_entry->dest_ipv6, 0, sizeof(free_entry->dest_ipv6));
+	memset(free_entry->dest_netaddr_ipv6, 0, sizeof(free_entry->dest_netaddr_ipv6));
 
 	free_entry->use_flag = IPSEC_USED ;
 
@@ -485,6 +589,36 @@ spd_entry *ipsec_spd_add(__u32 src, __u32 src_net, __u32 dst, __u32 dst_net, __u
 
 	IPSEC_LOG_TRC(IPSEC_TRACE_RETURN, "ipsec_spd_add", ("free_entry=%p", (void *)free_entry) );
 	return free_entry ;
+}
+
+void ipsec_spd_set_ipv6(spd_entry *entry, const __u8 *src, const __u8 *src_net, const __u8 *dst, const __u8 *dst_net)
+{
+	if(entry == NULL)
+	{
+		return;
+	}
+
+	entry->addr_family = IPSEC_AF_INET6;
+	memcpy(entry->src_ipv6, src, 16);
+	memcpy(entry->src_netaddr_ipv6, src_net, 16);
+	memcpy(entry->dest_ipv6, dst, 16);
+	memcpy(entry->dest_netaddr_ipv6, dst_net, 16);
+}
+
+spd_entry *ipsec_spd_add_ipv6(const __u8 *src, const __u8 *src_net, const __u8 *dst,
+								  const __u8 *dst_net, __u8 proto, __u16 src_port,
+								  __u16 dst_port, __u8 policy, spd_table *table)
+{
+	spd_entry *entry;
+
+	entry = ipsec_spd_add(0, 0, 0, 0, proto, src_port, dst_port, policy, table);
+	if(entry == NULL)
+	{
+		return NULL;
+	}
+
+	ipsec_spd_set_ipv6(entry, src, src_net, dst, dst_net);
+	return entry;
 }
 /**
  * Adds a Security Association to a Security Police.
@@ -532,7 +666,7 @@ ipsec_status ipsec_spd_del(spd_entry *entry, spd_table *table)
 			 );
 
 	/* check range */		
-	if((entry >= table->table ) && (entry <= (table->table + (IPSEC_MAX_SPD_ENTRIES*sizeof(spd_entry)))))
+	if((entry >= table->table ) && (entry < (table->table + IPSEC_MAX_SPD_ENTRIES)))
 	{
 		/* first clear associated SA if there is one */
 		/**@todo probably the SA should also be deleted */
@@ -556,7 +690,7 @@ ipsec_status ipsec_spd_del(spd_entry *entry, spd_table *table)
 		/* if removed last entry */
 		if(entry->next == NULL)
 		{
-			table->last == entry->prev ;
+			table->last = entry->prev ;
 		}
 
 		/* if removed first entry */
@@ -594,10 +728,19 @@ ipsec_status ipsec_spd_del(spd_entry *entry, spd_table *table)
  * @return 	NULL if no entry matched 
  * @todo port checking should be implemnted also
  */
-spd_entry *ipsec_spd_lookup(ipsec_ip_header *header, spd_table *table)
+spd_entry *ipsec_spd_lookup(void *header, spd_table *table)
 {
 	spd_entry	*tmp_entry ;
-	ipsec_in_ip	*ip ;
+	const void *payload;
+	const ipsec_tcp_header *tcp;
+	const ipsec_udp_header *udp;
+	ipsec_ip_address packet_src;
+	ipsec_ip_address packet_dst;
+	ipsec_ip_address entry_src;
+	ipsec_ip_address entry_src_mask;
+	ipsec_ip_address entry_dst;
+	ipsec_ip_address entry_dst_mask;
+	__u8 packet_protocol;
 
 	IPSEC_LOG_TRC(IPSEC_TRACE_ENTER, 
               "ipsec_spd_lookup", 
@@ -605,30 +748,44 @@ spd_entry *ipsec_spd_lookup(ipsec_ip_header *header, spd_table *table)
 		      (void *)header, (void *)table)
 			 );
 
-	ip = (ipsec_in_ip*) header ;
+	ipsec_packet_get_addresses(header, &packet_src, &packet_dst);
+	packet_protocol = ipsec_packet_protocol(header);
+	payload = ipsec_packet_payload_const(header);
 
 	/* compare and return when all fields match */
 	for(tmp_entry = table->first; tmp_entry != NULL; tmp_entry = tmp_entry->next)
 	{
-		if(ipsec_ip_addr_maskcmp(header->src, tmp_entry->src, tmp_entry->src_netaddr))
+		if(ipsec_packet_family(header) != ipsec_spd_entry_family(tmp_entry))
 		{
-			if(ipsec_ip_addr_maskcmp(header->dest, tmp_entry->dest, tmp_entry->dest_netaddr))
+			continue;
+		}
+
+		ipsec_spd_entry_src_address(tmp_entry, &entry_src);
+		ipsec_spd_entry_src_mask(tmp_entry, &entry_src_mask);
+		ipsec_spd_entry_dest_address(tmp_entry, &entry_dst);
+		ipsec_spd_entry_dest_mask(tmp_entry, &entry_dst_mask);
+
+		if(ipsec_address_maskcmp(&packet_src, &entry_src, &entry_src_mask))
+		{
+			if(ipsec_address_maskcmp(&packet_dst, &entry_dst, &entry_dst_mask))
 			{
-				if((tmp_entry->protocol == 0) || tmp_entry->protocol == header->protocol)
+				if((tmp_entry->protocol == 0) || tmp_entry->protocol == packet_protocol)
 				{
-					if(header->protocol == IPSEC_PROTO_TCP)
+					if(packet_protocol == IPSEC_PROTO_TCP)
 					{
-						if((tmp_entry->src_port == 0) || (tmp_entry->src_port == ip->inner_header.tcp.src)) 
-							if( (tmp_entry->dest_port == 0) || (tmp_entry->dest_port == ip->inner_header.tcp.dest)) 
+						tcp = (const ipsec_tcp_header *)payload;
+						if((tmp_entry->src_port == 0) || (tmp_entry->src_port == tcp->src)) 
+							if( (tmp_entry->dest_port == 0) || (tmp_entry->dest_port == tcp->dest)) 
 							{
 								IPSEC_LOG_TRC(IPSEC_TRACE_RETURN, "ipsec_spd_lookup", ("tmp_entry = %p", (void *) tmp_entry) );
 								return tmp_entry ;
 							}
 					}
-					else if(header->protocol == IPSEC_PROTO_UDP)
+					else if(packet_protocol == IPSEC_PROTO_UDP)
 					{
-							if((tmp_entry->src_port == 0) || (tmp_entry->src_port == ip->inner_header.udp.src)) 
-								if( (tmp_entry->dest_port == 0) || (tmp_entry->dest_port == ip->inner_header.udp.dest)) 
+							udp = (const ipsec_udp_header *)payload;
+							if((tmp_entry->src_port == 0) || (tmp_entry->src_port == udp->src)) 
+								if( (tmp_entry->dest_port == 0) || (tmp_entry->dest_port == udp->dest)) 
 								{
 									IPSEC_LOG_TRC(IPSEC_TRACE_RETURN, "ipsec_spd_lookup", ("tmp_entry = %p", (void *) tmp_entry) );
 									return tmp_entry ;
@@ -663,10 +820,20 @@ void ipsec_spd_print_single(spd_entry *entry)
 	char		protocol[10+1] ;
 	char		policy[10+1] ;
 
-	strcpy(ip_addr1, ipsec_inet_ntoa(entry->src)) ;
-	strcpy(ip_addr2, ipsec_inet_ntoa(entry->src_netaddr)) ;
-	strcpy(ip_addr3, ipsec_inet_ntoa(entry->dest)) ;
-	strcpy(ip_addr4, ipsec_inet_ntoa(entry->dest_netaddr)) ;
+	{
+		ipsec_ip_address address;
+		ipsec_ip_address mask;
+
+		ipsec_spd_entry_src_address(entry, &address);
+		ipsec_spd_entry_src_mask(entry, &mask);
+		ipsec_format_address(&address, ip_addr1);
+		ipsec_format_address(&mask, ip_addr2);
+
+		ipsec_spd_entry_dest_address(entry, &address);
+		ipsec_spd_entry_dest_mask(entry, &mask);
+		ipsec_format_address(&address, ip_addr3);
+		ipsec_format_address(&mask, ip_addr4);
+	}
 
 	switch(entry->protocol)
 	{
@@ -824,6 +991,9 @@ sad_entry *ipsec_sad_add(sad_entry *entry, sad_table *table)
 	memcpy(free_entry->enckey, entry->enckey, IPSEC_MAX_ENCKEY_LEN) ;
 	free_entry->auth_alg = entry->auth_alg ;
 	memcpy(free_entry->authkey, entry->authkey, IPSEC_MAX_AUTHKEY_LEN) ;
+	free_entry->addr_family = entry->addr_family ;
+	memcpy(free_entry->dest_ipv6, entry->dest_ipv6, sizeof(free_entry->dest_ipv6)) ;
+	memcpy(free_entry->dest_netaddr_ipv6, entry->dest_netaddr_ipv6, sizeof(free_entry->dest_netaddr_ipv6)) ;
 
 	free_entry->use_flag = IPSEC_USED ;
 
@@ -854,6 +1024,18 @@ sad_entry *ipsec_sad_add(sad_entry *entry, sad_table *table)
 	return free_entry ;
 }
 
+void ipsec_sad_set_ipv6(sad_entry *entry, const __u8 *dest, const __u8 *dest_net)
+{
+	if(entry == NULL)
+	{
+		return;
+	}
+
+	entry->addr_family = IPSEC_AF_INET6;
+	memcpy(entry->dest_ipv6, dest, 16);
+	memcpy(entry->dest_netaddr_ipv6, dest_net, 16);
+}
+
 /**
  * Deletes an Security Association from an SA table.
  *
@@ -879,7 +1061,7 @@ ipsec_status ipsec_sad_del(sad_entry *entry, sad_table *table)
 				 );
 
 	/* check range */		
-	if((entry >= table->table ) && (entry <= (table->table + (IPSEC_MAX_SAD_ENTRIES*sizeof(sad_entry)))))
+	if((entry >= table->table ) && (entry < (table->table + IPSEC_MAX_SAD_ENTRIES)))
 	{
 		/* relink table */
 	
@@ -900,7 +1082,7 @@ ipsec_status ipsec_sad_del(sad_entry *entry, sad_table *table)
 		/* if removed last entry */
 		if(entry->next == NULL)
 		{
-			table->last == entry->prev ;
+			table->last = entry->prev ;
 		}
 
 		/* if removed first entry */
@@ -939,18 +1121,36 @@ ipsec_status ipsec_sad_del(sad_entry *entry, sad_table *table)
  */
 sad_entry *ipsec_sad_lookup(__u32 dest, __u8 proto, __u32 spi, sad_table *table)
 {
+	ipsec_ip_address dest_addr;
+
+	ipsec_address_set_ipv4(&dest_addr, dest);
+	return ipsec_sad_lookup_addr(&dest_addr, proto, spi, table) ;
+}
+
+sad_entry *ipsec_sad_lookup_addr(const ipsec_ip_address *dest, __u8 proto, __u32 spi, sad_table *table)
+{
 	sad_entry	*tmp_entry ;
+	ipsec_ip_address entry_dest;
+	ipsec_ip_address entry_mask;
 
 	IPSEC_LOG_TRC(IPSEC_TRACE_ENTER, 
 	              "ipsec_sad_lookup", 
-				  ("dest=%lu, proto=%d, spi=%lu, table=%p",
-			      dest, proto, spi, (void *)table ) 
+				  ("dest=%p, proto=%d, spi=%lu, table=%p",
+			      (void *)dest, proto, spi, (void *)table ) 
 				 );
 
 	/* compare and return when all fields match */
 	for(tmp_entry = table->first; tmp_entry != NULL; tmp_entry = tmp_entry->next)
 	{
-		if(ipsec_ip_addr_maskcmp(dest, tmp_entry->dest, tmp_entry->dest_netaddr))
+		if(dest->family != ipsec_sad_entry_family(tmp_entry))
+		{
+			continue;
+		}
+
+		ipsec_sad_entry_dest_address(tmp_entry, &entry_dest);
+		ipsec_sad_entry_dest_mask(tmp_entry, &entry_mask);
+
+		if(ipsec_address_maskcmp(dest, &entry_dest, &entry_mask))
 		{
 			if(tmp_entry->protocol == proto)
 			{
@@ -979,8 +1179,15 @@ void ipsec_sad_print_single(sad_entry *entry)
 	char 		dest_netaddr[IPSEC_LOG_MESSAGE_SIZE+1] ;
 	char 		crypto[10+1] ;
 
-	strcpy(dest, ipsec_inet_ntoa(entry->dest)) ;
-	strcpy(dest_netaddr, ipsec_inet_ntoa(entry->dest_netaddr)) ;
+	{
+		ipsec_ip_address address;
+		ipsec_ip_address mask;
+
+		ipsec_sad_entry_dest_address(entry, &address);
+		ipsec_sad_entry_dest_mask(entry, &mask);
+		ipsec_format_address(&address, dest);
+		ipsec_format_address(&mask, dest_netaddr);
+	}
 
 	if (entry->protocol == IPSEC_PROTO_AH)
 		strcpy(crypto, entry->auth_alg == IPSEC_HMAC_MD5 ? " MD5" : "SHA1") ;
@@ -1037,9 +1244,12 @@ void ipsec_sad_print(sad_table *table)
  * @return the SPI if one could be extracted
  * @return 0 if no SPI could be extracted (not IPsec packet)
  */
-__u32 ipsec_sad_get_spi(ipsec_ip_header *header)
+__u32 ipsec_sad_get_spi(void *header)
 {
-	ipsec_in_ip	*ptr ;
+	const void *payload;
+	const ipsec_esp_header *esp;
+	const ipsec_ah_header *ah;
+	__u8 protocol;
 
 	IPSEC_LOG_TRC(IPSEC_TRACE_ENTER, 
 	              "ipsec_sad_get_spi", 
@@ -1048,18 +1258,21 @@ __u32 ipsec_sad_get_spi(ipsec_ip_header *header)
 				 );
 
 
-	ptr = (ipsec_in_ip*)header ;
+	payload = ipsec_packet_payload_const(header);
+	protocol = ipsec_packet_protocol(header);
 
-	if (ptr->ip.protocol == IPSEC_PROTO_ESP)
+	if (protocol == IPSEC_PROTO_ESP)
 	{
-		IPSEC_LOG_TRC(IPSEC_TRACE_RETURN, "ipsec_sad_get_spi", ("ptr->inner_header.esp.spi = %ul", ptr->inner_header.esp.spi) );
-		return ptr->inner_header.esp.spi ;
+		esp = (const ipsec_esp_header *)payload;
+		IPSEC_LOG_TRC(IPSEC_TRACE_RETURN, "ipsec_sad_get_spi", ("esp->spi = %ul", esp->spi) );
+		return esp->spi ;
 	}
 
- 	if (ptr->ip.protocol == IPSEC_PROTO_AH)
+	if (protocol == IPSEC_PROTO_AH)
 	{
-		IPSEC_LOG_TRC(IPSEC_TRACE_RETURN, "ipsec_sad_get_spi", ("ptr->inner_header.ah.spi = %ul", ptr->inner_header.ah.spi) );
-		return ptr->inner_header.ah.spi ;
+		ah = (const ipsec_ah_header *)payload;
+		IPSEC_LOG_TRC(IPSEC_TRACE_RETURN, "ipsec_sad_get_spi", ("ah->spi = %ul", ah->spi) );
+		return ah->spi ;
 	}
 
 	IPSEC_LOG_TRC(IPSEC_TRACE_RETURN, "ipsec_sad_get_spi", ("return = 0") );
@@ -1081,7 +1294,20 @@ ipsec_status ipsec_spd_flush(spd_table *table, spd_entry *def_entry)
 	table->first = NULL ;
 	table->first = NULL ;
 
-	if(ipsec_spd_add(	def_entry->src,
+	if(ipsec_spd_entry_family(def_entry) == IPSEC_AF_INET6)
+	{
+		if(ipsec_spd_add_ipv6(def_entry->src_ipv6,
+							 def_entry->src_netaddr_ipv6,
+							 def_entry->dest_ipv6,
+							 def_entry->dest_netaddr_ipv6,
+							 def_entry->protocol,
+							 def_entry->src_port,
+							 def_entry->dest_port,
+							 def_entry->policy,
+							 table) == NULL)
+			return IPSEC_STATUS_FAILURE ;
+	}
+	else if(ipsec_spd_add(	def_entry->src,
 						def_entry->src_netaddr,
 						def_entry->dest,
 						def_entry->dest_netaddr,
