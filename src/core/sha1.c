@@ -102,6 +102,8 @@ void sha1_block_data_order (SHA_CTX *c, const void *p,int num);
 #ifdef __C166__
 #include <intrins.h>
 #define ROTATE(a,n)	_lrol_(a,n)
+#else
+#define ROTATE(a,n) ((((unsigned long)(a)) << (n)) | (((unsigned long)(a)) >> (32 - (n))))
 #endif
 
 

@@ -194,7 +194,7 @@ int des_test_des_ede3_cbc_encrypt(void)
 					 DES_DECRYPT,
 					 esp_decrypted_payload);
 
-	ret_val = memcmp((unsigned char *)esp_orig_payload[52], (unsigned char *)esp_decrypted_payload[52], sizeof(esp_encrypted_payload) - 52);
+	ret_val = memcmp(&esp_orig_payload[52], &esp_decrypted_payload[52], sizeof(esp_encrypted_payload) - 52);
 	if (ret_val != 0)
 	{
 		local_error_count++;

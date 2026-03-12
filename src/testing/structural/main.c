@@ -64,7 +64,9 @@
 #include "ipsec/debug.h"
 #include "ipsec/util.h"
 
+#ifdef SIMULATOR
 extern void serinit(void) ;
+#endif
 
 /* declare all test functions here */
 extern void util_debug_test(test_result *);
@@ -100,7 +102,7 @@ test_set test_function_set[] =
  *
  * @return void
  */
-void main(void)
+int main(void)
 {
 	int 			i ;
 	float			percents;
@@ -139,9 +141,7 @@ void main(void)
 	}
 	IPSEC_LOG_MSG("main", (" o %6.2f%% complete (%d of %d functions implemented)", percents, (global_results.functions-global_results.notimplemented), global_results.functions));
 	
-	while(1) ;
-
-  return ;
+	return global_results.errors == 0 ? 0 : 1;
 }
 
 

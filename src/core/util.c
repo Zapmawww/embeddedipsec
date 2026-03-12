@@ -138,8 +138,8 @@ int ipsec_inet_aton(const char *cp, struct ipsec_in_addr *addr)
      __u32 val;
      int base, n;
      char c;
-     static __u32 huge parts[4];
-     static __u32 huge *pp ;
+  static __u32 parts[4];
+  static __u32 *pp ;
 	 
 	 pp = parts;
 

@@ -159,7 +159,7 @@ typedef struct db_set_netif_struct
 			IPSEC_IP4_ADDR_2(d1, d2, d3, d4), \
 			IPSEC_IP4_ADDR_2(dn1, dn2, dn3, dn4), \
 			IPSEC_HTONL(spi), \
-			proto, \ 
+			proto, \
 			mode, \
 			0, 0, 0, 1450, \
 			enc_alg, \
@@ -169,7 +169,7 @@ typedef struct db_set_netif_struct
 			0,0, IPSEC_USED 	/**< helps to statically configure the SAD entries */
 
 #define EMPTY_SAD_ENTRY { 0, 0, 0, 0, 0, 0, \
-						  0, 0, 0, 0, 0, 0, \ 
+						  0, 0, 0, 0, 0, 0, \
 						  0, 0, 0, 0, 0, 0, \
 						  0, 0, 0, 0, 0, 0, \
 						  0, 0, 0, 0, 0, 0, \

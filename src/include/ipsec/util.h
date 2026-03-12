@@ -43,7 +43,7 @@
 #ifndef __UTIL_H__
 #define __UTIL_H__
 
-#include "ipsec\types.h"
+#include "ipsec/types.h"
 
 /** 
  * IP related stuff

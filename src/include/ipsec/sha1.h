@@ -61,7 +61,7 @@ typedef struct SHAstate_st
 	SHA_LONG h0,h1,h2,h3,h4;
 	SHA_LONG Nl,Nh;
 	SHA_LONG data[SHA_LBLOCK];
-	int num;
+	__u16 num;
 	} SHA_CTX;
 
 void SHA1_Init(SHA_CTX *c);

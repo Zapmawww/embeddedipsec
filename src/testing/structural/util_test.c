@@ -157,7 +157,7 @@ int util_test_ipsec_update_replay_window()
 	if(errors != 0)
 	{
 		local_error_count++ ;
-		IPSEC_LOG_TST(util_test_ipsec_update_replay_window, "FAILURE", ("%d errors when sequence number is increasing strictly - this should be error free!", errors)) ;
+		IPSEC_LOG_TST("util_test_ipsec_update_replay_window", "FAILURE", ("%d errors when sequence number is increasing strictly - this should be error free!", errors)) ;
 	}
 	  
 
@@ -194,7 +194,7 @@ int util_test_ipsec_update_replay_window()
 	if(errors != 12)
 	{
 		local_error_count++ ;
-		IPSEC_LOG_TST(util_test_ipsec_update_replay_window, "FAILURE", ("Replay check did not work - %d errors detected (expected: 12 errors)", errors)) ;
+		IPSEC_LOG_TST("util_test_ipsec_update_replay_window", "FAILURE", ("Replay check did not work - %d errors detected (expected: 12 errors)", errors)) ;
 	}
 	  
 
@@ -242,7 +242,7 @@ int util_test_ipsec_update_replay_window()
 	if(errors != 3)
 	{
 		local_error_count++ ;
-		IPSEC_LOG_TST(util_test_ipsec_update_replay_window, "FAILURE", ("Out-of-window tests failed.")) ;
+		IPSEC_LOG_TST("util_test_ipsec_update_replay_window", "FAILURE", ("Out-of-window tests failed.")) ;
 	}
 
 

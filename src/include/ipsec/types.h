@@ -96,8 +96,14 @@ typedef enum ipsec_ip_protocol_list {			/** IP protocol number for ... */
 } ipsec_ip_protocol;
 
 
+#if defined(_MSC_VER)
+#pragma pack(push, 1)
+#elif defined(__C166__)
 #pragma pack(1)
 #pragma bytealign
+#else
+#pragma pack(push, 1)
+#endif
 
 typedef struct ipsec_ip_hdr_struct 
 {
@@ -132,6 +138,10 @@ typedef struct ipsec_udp_hdr_struct
 	__u16	len ;			/**< length of UDP header and data  */
 	__u16	chksum ;		/**< checksum                       */
 } ipsec_udp_header ;
+
+#if defined(_MSC_VER) || !defined(__C166__)
+#pragma pack(pop)
+#endif
 
 
 

@@ -43,7 +43,14 @@
 #define __IPSEC_H__
 
 #include "ipsec/types.h"
-#include "netif/ipsecdev.h"
+
+#ifndef IPSEC_HLEN
+#define IPSEC_HLEN           (80)    /**< default room for outer IP header and AH/ESP data */
+#endif
+
+#ifndef IPSEC_MTU
+#define IPSEC_MTU            (1400)  /**< standalone maximum packet size when no TCP/IP stack is present */
+#endif
 
 
 #define IPSEC_DES_KEY_LEN		(8)							/**< Defines the size of a DES key in bytes */

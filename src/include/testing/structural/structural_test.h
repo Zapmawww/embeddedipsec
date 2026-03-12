@@ -54,7 +54,7 @@ typedef struct test_result_struct
  * information.
  * @todo this doxygen tag is not working. probably because of the complexity of the macro
  */
-#define IPSEC_TESTING_EVALUATE(__retcode__, __sub_results__, __functionname__, __msg__)   { \	
+#define IPSEC_TESTING_EVALUATE(__retcode__, __sub_results__, __functionname__, __msg__)   { \
 			switch(__retcode__) { \
 				case IPSEC_STATUS_SUCCESS: ; \
 						IPSEC_LOG_TST_NOMSG(__functionname__, "SUCCESS  "); \
