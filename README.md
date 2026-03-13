@@ -28,6 +28,8 @@ Packet dump tool
  - `embeddedipsec_packet_dump_tool generate <file.pcap>` writes protected raw IP packets to a PCAP file that can be opened directly in Wireshark.
  - `embeddedipsec_packet_dump_tool verify <file.pcap>` reads the same capture back through `ipsec_input()` and checks that decapsulation recovers the expected plaintext packets.
  - `embeddedipsec_packet_dump_tool roundtrip <file.pcap>` runs both steps and is also registered as a CTest test.
+ - The generator also writes `<file.pcap>.labels.txt` with per-frame labels because classic PCAP cannot store packet comments.
+ - `doc/packet-dump-manual-check.md` documents the expected PCAP contents and a manual Wireshark verification workflow.
 
 Copyright (c) 2003-2004 Niklaus Schild and Christian Scheurer, HTI Biel/Bienne
 All rights reserved.

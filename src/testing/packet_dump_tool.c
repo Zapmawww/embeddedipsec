@@ -32,7 +32,6 @@
 #include <string.h>
 
 #include "ipsec/ah.h"
-#include "ipsec/debug.h"
 #include "ipsec/esp.h"
 #include "ipsec/ipsec.h"
 #include "ipsec/sa.h"
@@ -45,6 +44,7 @@
 #define PACKET_DUMP_PCAP_VERSION_MAJOR   (2)
 #define PACKET_DUMP_PCAP_VERSION_MINOR   (4)
 #define PACKET_DUMP_PCAP_LINKTYPE_RAW    (101)
+#define PACKET_DUMP_CASE_COUNT           (10)
 
 typedef struct packet_dump_pcap_header_struct
 {
@@ -68,25 +68,55 @@ typedef struct packet_dump_pcap_record_header_struct
 typedef struct packet_dump_case_struct
 {
 	const char *name;
+	const char *label;
 	__u8 family;
 	__u8 protocol;
 	__u8 mode;
+	__u8 enc_alg;
+	__u8 auth_alg;
+	__u32 spi;
+	__u16 src_port;
+	__u16 dst_port;
+	__u32 inner_src_ipv4;
+	__u32 inner_dst_ipv4;
+	__u32 outer_src_ipv4;
+	__u32 outer_dst_ipv4;
+	__u8 inner_src_ipv6[16];
+	__u8 inner_dst_ipv6[16];
+	__u8 outer_src_ipv6[16];
+	__u8 outer_dst_ipv6[16];
 	int original_len;
 	unsigned char original[IPSEC_MTU];
 	spd_entry outbound_spd;
+	spd_entry inbound_spd_template;
 	sad_entry outbound_sa;
 	sad_entry inbound_sa_template;
-	spd_entry inbound_spd_template;
-	__u8 outer_src_ipv6[16];
-	__u8 outer_dst_ipv6[16];
-	__u32 outer_src_ipv4;
-	__u32 outer_dst_ipv4;
 } packet_dump_case;
 
 static const __u8 packet_dump_mask_full[16] =
 {
 	0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
 	0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff
+};
+
+static const __u8 packet_dump_aes_key[16] =
+{
+	0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6,
+	0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf, 0x4f, 0x3c
+};
+
+static const __u8 packet_dump_3des_key[24] =
+{
+	0x01, 0x23, 0x45, 0x67, 0x01, 0x23, 0x45, 0x67,
+	0x01, 0x23, 0x45, 0x67, 0x01, 0x23, 0x45, 0x67,
+	0x01, 0x23, 0x45, 0x67, 0x01, 0x23, 0x45, 0x67
+};
+
+static const __u8 packet_dump_auth_key[20] =
+{
+	0x01, 0x23, 0x45, 0x67, 0x01, 0x23, 0x45, 0x67,
+	0x01, 0x23, 0x45, 0x67, 0x01, 0x23, 0x45, 0x67,
+	0x89, 0xab, 0xcd, 0xef
 };
 
 static const __u8 packet_dump_ipv6_transport_src[16] =
@@ -113,19 +143,45 @@ static const __u8 packet_dump_ipv6_tunnel_dst[16] =
 	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02
 };
 
-static __u8 packet_dump_esp_padding(int len, __u8 block_len)
+static const char *packet_dump_family_name(__u8 family)
 {
-	int padding;
+	return family == IPSEC_AF_INET6 ? "IPv6" : "IPv4";
+}
 
-	for(padding = 0; padding < block_len; padding++)
+static const char *packet_dump_protocol_name(__u8 protocol)
+{
+	return protocol == IPSEC_PROTO_AH ? "AH" : "ESP";
+}
+
+static const char *packet_dump_mode_name(__u8 mode)
+{
+	return mode == IPSEC_TUNNEL ? "tunnel" : "transport";
+}
+
+static const char *packet_dump_enc_name(__u8 enc_alg)
+{
+	switch(enc_alg)
 	{
-		if(((len + padding) % block_len) == 0)
-		{
-			return (__u8)padding;
-		}
+		case IPSEC_AES_CBC:
+			return "AES-CBC";
+		case IPSEC_3DES:
+			return "3DES-CBC";
+		default:
+			return "none";
 	}
+}
 
-	return 0;
+static const char *packet_dump_auth_name(__u8 auth_alg)
+{
+	switch(auth_alg)
+	{
+		case IPSEC_HMAC_MD5:
+			return "HMAC-MD5-96";
+		case IPSEC_HMAC_SHA1:
+			return "HMAC-SHA1-96";
+		default:
+			return "none";
+	}
 }
 
 static void packet_dump_init_ipv4_tcp_packet(unsigned char *buffer, __u32 src, __u32 dst, __u16 src_port, __u16 dst_port)
@@ -177,170 +233,240 @@ static void packet_dump_init_ipv6_tcp_packet(unsigned char *buffer, const __u8 *
 	tcp->wnd = ipsec_htons(1024);
 }
 
-static sad_entry packet_dump_make_ipv4_ah_sa(__u32 spi, __u8 mode, __u32 dest)
+static void packet_dump_fill_sa_keys(sad_entry *sa, __u8 enc_alg, __u8 auth_alg)
 {
-	sad_entry sa = { SAD_ENTRY(0,0,0,0, 255,255,255,255,
-					  spi,
-					  IPSEC_PROTO_AH, mode,
-					  0,
-					  0x01, 0x23, 0x45, 0x67, 0x01, 0x23, 0x45, 0x67,
-					  0x01, 0x23, 0x45, 0x67, 0x01, 0x23, 0x45, 0x67,
-					  0x01, 0x23, 0x45, 0x67, 0x01, 0x23, 0x45, 0x67,
-					  IPSEC_HMAC_MD5,
-					  0x01, 0x23, 0x45, 0x67, 0x01, 0x23, 0x45, 0x67,
-					  0x01, 0x23, 0x45, 0x67, 0x01, 0x23, 0x45, 0x67,
-					  0, 0, 0, 0) };
+	if(enc_alg == IPSEC_AES_CBC)
+	{
+		memcpy(sa->enckey, packet_dump_aes_key, sizeof(packet_dump_aes_key));
+	}
+	else if(enc_alg == IPSEC_3DES)
+	{
+		memcpy(sa->enckey, packet_dump_3des_key, sizeof(packet_dump_3des_key));
+	}
 
+	if(auth_alg != 0)
+	{
+		memcpy(sa->authkey, packet_dump_auth_key, sizeof(packet_dump_auth_key));
+	}
+}
+
+static sad_entry packet_dump_make_ipv4_sa(__u32 spi, __u8 protocol, __u8 mode, __u8 enc_alg, __u8 auth_alg, __u32 dest)
+{
+	sad_entry sa;
+
+	memset(&sa, 0, sizeof(sa));
 	sa.dest = dest;
+	sa.dest_netaddr = ipsec_inet_addr("255.255.255.255");
+	sa.spi = ipsec_htonl(spi);
+	sa.protocol = protocol;
+	sa.mode = mode;
+	sa.replay_win = IPSEC_SEQ_MAX_WINDOW;
+	sa.path_mtu = 1450;
+	sa.enc_alg = enc_alg;
+	sa.auth_alg = auth_alg;
+	sa.use_flag = IPSEC_USED;
+	packet_dump_fill_sa_keys(&sa, enc_alg, auth_alg);
 	return sa;
 }
 
-static sad_entry packet_dump_make_ipv4_esp_sa(__u32 spi, __u8 mode, __u32 dest)
+static sad_entry packet_dump_make_ipv6_sa(__u32 spi, __u8 protocol, __u8 mode, __u8 enc_alg, __u8 auth_alg, const __u8 *dest)
 {
-	sad_entry sa = { SAD_ENTRY(0,0,0,0, 255,255,255,255,
-					  spi,
-					  IPSEC_PROTO_ESP, mode,
-					  IPSEC_AES_CBC,
-					  0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6,
-					  0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf, 0x4f, 0x3c,
-					  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-					  0,
-					  0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-					  0, 0, 0, 0, 0, 0, 0, 0, 0, 0) };
+	sad_entry sa;
 
-	sa.dest = dest;
-	return sa;
-}
-
-static sad_entry packet_dump_make_ipv6_ah_sa(__u32 spi, __u8 mode, const __u8 *dest)
-{
-	sad_entry sa = { SAD_ENTRY(0,0,0,0, 0,0,0,0,
-					   spi,
-					   IPSEC_PROTO_AH, mode,
-					   0,
-					   0x01, 0x23, 0x45, 0x67, 0x01, 0x23, 0x45, 0x67,
-					   0x01, 0x23, 0x45, 0x67, 0x01, 0x23, 0x45, 0x67,
-					   0x01, 0x23, 0x45, 0x67, 0x01, 0x23, 0x45, 0x67,
-					   IPSEC_HMAC_MD5,
-					   0x01, 0x23, 0x45, 0x67, 0x01, 0x23, 0x45, 0x67,
-					   0x01, 0x23, 0x45, 0x67, 0x01, 0x23, 0x45, 0x67,
-					   0, 0, 0, 0) };
-
+	memset(&sa, 0, sizeof(sa));
+	sa.spi = ipsec_htonl(spi);
+	sa.protocol = protocol;
+	sa.mode = mode;
+	sa.replay_win = IPSEC_SEQ_MAX_WINDOW;
+	sa.path_mtu = 1450;
+	sa.enc_alg = enc_alg;
+	sa.auth_alg = auth_alg;
+	sa.use_flag = IPSEC_USED;
 	ipsec_sad_set_ipv6(&sa, dest, packet_dump_mask_full);
+	packet_dump_fill_sa_keys(&sa, enc_alg, auth_alg);
 	return sa;
 }
 
-static sad_entry packet_dump_make_ipv6_esp_sa(__u32 spi, __u8 mode, const __u8 *dest)
+static void packet_dump_configure_spd_ipv4(spd_entry *spd, __u32 src, __u32 dst, __u16 src_port, __u16 dst_port)
 {
-	sad_entry sa = { SAD_ENTRY(0,0,0,0, 0,0,0,0,
-					   spi,
-					   IPSEC_PROTO_ESP, mode,
-					   IPSEC_AES_CBC,
-					   0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6,
-					   0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf, 0x4f, 0x3c,
-					   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-					   0,
-					   0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-					   0, 0, 0, 0, 0, 0, 0, 0, 0, 0) };
-
-	ipsec_sad_set_ipv6(&sa, dest, packet_dump_mask_full);
-	return sa;
+	memset(spd, 0, sizeof(*spd));
+	spd->src = src;
+	spd->src_netaddr = ipsec_inet_addr("255.255.255.255");
+	spd->dest = dst;
+	spd->dest_netaddr = ipsec_inet_addr("255.255.255.255");
+	spd->protocol = IPSEC_PROTO_TCP;
+	spd->src_port = ipsec_htons(src_port);
+	spd->dest_port = ipsec_htons(dst_port);
+	spd->policy = POLICY_APPLY;
+	spd->use_flag = IPSEC_USED;
 }
 
-static void packet_dump_init_case(packet_dump_case *test_case, const char *name, __u8 family, __u8 protocol, __u8 mode)
+static void packet_dump_configure_spd_ipv6(spd_entry *spd, const __u8 *src, const __u8 *dst, __u16 src_port, __u16 dst_port)
+{
+	memset(spd, 0, sizeof(*spd));
+	ipsec_spd_set_ipv6(spd, src, packet_dump_mask_full, dst, packet_dump_mask_full);
+	spd->protocol = IPSEC_PROTO_TCP;
+	spd->src_port = ipsec_htons(src_port);
+	spd->dest_port = ipsec_htons(dst_port);
+	spd->policy = POLICY_APPLY;
+	spd->use_flag = IPSEC_USED;
+}
+
+static void packet_dump_set_case_ipv4(packet_dump_case *test_case, const char *name, __u8 protocol, __u8 mode,
+					      __u8 enc_alg, __u8 auth_alg, __u32 spi,
+					      __u16 src_port, __u16 dst_port,
+					      __u32 inner_src, __u32 inner_dst,
+					      __u32 outer_src, __u32 outer_dst)
 {
 	memset(test_case, 0, sizeof(*test_case));
 	test_case->name = name;
-	test_case->family = family;
+	test_case->family = IPSEC_AF_INET;
 	test_case->protocol = protocol;
 	test_case->mode = mode;
-	if(protocol == IPSEC_PROTO_AH)
-	{
-		test_case->inbound_sa_template.replay_win = IPSEC_SEQ_MAX_WINDOW;
-	}
-	else
-	{
-		test_case->inbound_sa_template.replay_win = IPSEC_SEQ_MAX_WINDOW;
-	}
+	test_case->enc_alg = enc_alg;
+	test_case->auth_alg = auth_alg;
+	test_case->spi = spi;
+	test_case->src_port = src_port;
+	test_case->dst_port = dst_port;
+	test_case->inner_src_ipv4 = inner_src;
+	test_case->inner_dst_ipv4 = inner_dst;
+	test_case->outer_src_ipv4 = outer_src;
+	test_case->outer_dst_ipv4 = outer_dst;
+	packet_dump_init_ipv4_tcp_packet(test_case->original, inner_src, inner_dst, src_port, dst_port);
+	test_case->original_len = IPSEC_IPV4_HDR_SIZE + (int)sizeof(ipsec_tcp_header);
+	test_case->outbound_sa = packet_dump_make_ipv4_sa(spi, protocol, mode, enc_alg, auth_alg, outer_dst);
+	test_case->inbound_sa_template = packet_dump_make_ipv4_sa(spi, protocol, mode, enc_alg, auth_alg, outer_dst);
+	packet_dump_configure_spd_ipv4(&test_case->outbound_spd, inner_src, inner_dst, src_port, dst_port);
+	packet_dump_configure_spd_ipv4(&test_case->inbound_spd_template, inner_src, inner_dst, src_port, dst_port);
+	ipsec_spd_add_sa(&test_case->outbound_spd, &test_case->outbound_sa);
+	ipsec_sad_reset_replay(&test_case->outbound_sa);
+	ipsec_sad_reset_replay(&test_case->inbound_sa_template);
+	test_case->inbound_sa_template.sequence_number = 0;
+}
+
+static void packet_dump_set_case_ipv6(packet_dump_case *test_case, const char *name, __u8 protocol, __u8 mode,
+					      __u8 enc_alg, __u8 auth_alg, __u32 spi,
+					      __u16 src_port, __u16 dst_port,
+					      const __u8 *inner_src, const __u8 *inner_dst,
+					      const __u8 *outer_src, const __u8 *outer_dst)
+{
+	memset(test_case, 0, sizeof(*test_case));
+	test_case->name = name;
+	test_case->family = IPSEC_AF_INET6;
+	test_case->protocol = protocol;
+	test_case->mode = mode;
+	test_case->enc_alg = enc_alg;
+	test_case->auth_alg = auth_alg;
+	test_case->spi = spi;
+	test_case->src_port = src_port;
+	test_case->dst_port = dst_port;
+	memcpy(test_case->inner_src_ipv6, inner_src, 16);
+	memcpy(test_case->inner_dst_ipv6, inner_dst, 16);
+	memcpy(test_case->outer_src_ipv6, outer_src, 16);
+	memcpy(test_case->outer_dst_ipv6, outer_dst, 16);
+	packet_dump_init_ipv6_tcp_packet(test_case->original, inner_src, inner_dst, src_port, dst_port);
+	test_case->original_len = IPSEC_IPV6_HDR_SIZE + (int)sizeof(ipsec_tcp_header);
+	test_case->outbound_sa = packet_dump_make_ipv6_sa(spi, protocol, mode, enc_alg, auth_alg, outer_dst);
+	test_case->inbound_sa_template = packet_dump_make_ipv6_sa(spi, protocol, mode, enc_alg, auth_alg, outer_dst);
+	packet_dump_configure_spd_ipv6(&test_case->outbound_spd, inner_src, inner_dst, src_port, dst_port);
+	packet_dump_configure_spd_ipv6(&test_case->inbound_spd_template, inner_src, inner_dst, src_port, dst_port);
+	ipsec_spd_add_sa(&test_case->outbound_spd, &test_case->outbound_sa);
+	ipsec_sad_reset_replay(&test_case->outbound_sa);
+	ipsec_sad_reset_replay(&test_case->inbound_sa_template);
+	test_case->inbound_sa_template.sequence_number = 0;
+}
+
+static void packet_dump_prepare_label(packet_dump_case *test_case, char *buffer, size_t buffer_size)
+{
+	_snprintf(buffer, buffer_size,
+		"%s | proto=%s | mode=%s | enc=%s | auth=%s",
+		test_case->name,
+		packet_dump_protocol_name(test_case->protocol),
+		packet_dump_mode_name(test_case->mode),
+		packet_dump_enc_name(test_case->enc_alg),
+		packet_dump_auth_name(test_case->auth_alg));
+	buffer[buffer_size - 1] = '\0';
+	test_case->label = buffer;
 }
 
 static void packet_dump_prepare_cases(packet_dump_case *cases, size_t *case_count)
 {
-	packet_dump_case *test_case;
+	static char labels[PACKET_DUMP_CASE_COUNT][160];
+	size_t index;
 
-	*case_count = 4;
+	*case_count = PACKET_DUMP_CASE_COUNT;
 
-	test_case = &cases[0];
-	packet_dump_init_case(test_case, "ipv4-ah-transport", IPSEC_AF_INET, IPSEC_PROTO_AH, IPSEC_TRANSPORT);
-	test_case->outer_src_ipv4 = ipsec_inet_addr("192.168.1.10");
-	test_case->outer_dst_ipv4 = ipsec_inet_addr("192.168.1.20");
-	packet_dump_init_ipv4_tcp_packet(test_case->original, test_case->outer_src_ipv4, test_case->outer_dst_ipv4, 1234, 4321);
-	test_case->original_len = IPSEC_IPV4_HDR_SIZE + (int)sizeof(ipsec_tcp_header);
-	test_case->outbound_sa = packet_dump_make_ipv4_ah_sa(0x5101, IPSEC_TRANSPORT, test_case->outer_dst_ipv4);
-	test_case->inbound_sa_template = packet_dump_make_ipv4_ah_sa(0x5101, IPSEC_TRANSPORT, test_case->outer_dst_ipv4);
-	test_case->outbound_spd = (spd_entry){ SPD_ENTRY(192,168,1,10, 255,255,255,255, 192,168,1,20, 255,255,255,255, IPSEC_PROTO_TCP, 1234, 4321, POLICY_APPLY, 0) };
-	test_case->inbound_spd_template = (spd_entry){ SPD_ENTRY(192,168,1,10, 255,255,255,255, 192,168,1,20, 255,255,255,255, IPSEC_PROTO_TCP, 1234, 4321, POLICY_APPLY, 0) };
+	packet_dump_set_case_ipv4(&cases[0], "ipv4-ah-transport-md5", IPSEC_PROTO_AH, IPSEC_TRANSPORT,
+		0, IPSEC_HMAC_MD5, 0x6101, 1101, 2101,
+		ipsec_inet_addr("192.168.1.10"), ipsec_inet_addr("192.168.1.20"),
+		ipsec_inet_addr("192.168.1.10"), ipsec_inet_addr("192.168.1.20"));
 
-	test_case = &cases[1];
-	packet_dump_init_case(test_case, "ipv4-esp-transport", IPSEC_AF_INET, IPSEC_PROTO_ESP, IPSEC_TRANSPORT);
-	test_case->outer_src_ipv4 = ipsec_inet_addr("192.168.1.10");
-	test_case->outer_dst_ipv4 = ipsec_inet_addr("192.168.1.20");
-	packet_dump_init_ipv4_tcp_packet(test_case->original, test_case->outer_src_ipv4, test_case->outer_dst_ipv4, 2222, 3333);
-	test_case->original_len = IPSEC_IPV4_HDR_SIZE + (int)sizeof(ipsec_tcp_header);
-	test_case->outbound_sa = packet_dump_make_ipv4_esp_sa(0x5102, IPSEC_TRANSPORT, test_case->outer_dst_ipv4);
-	test_case->inbound_sa_template = packet_dump_make_ipv4_esp_sa(0x5102, IPSEC_TRANSPORT, test_case->outer_dst_ipv4);
-	test_case->outbound_spd = (spd_entry){ SPD_ENTRY(192,168,1,10, 255,255,255,255, 192,168,1,20, 255,255,255,255, IPSEC_PROTO_TCP, 2222, 3333, POLICY_APPLY, 0) };
-	test_case->inbound_spd_template = (spd_entry){ SPD_ENTRY(192,168,1,10, 255,255,255,255, 192,168,1,20, 255,255,255,255, IPSEC_PROTO_TCP, 2222, 3333, POLICY_APPLY, 0) };
+	packet_dump_set_case_ipv4(&cases[1], "ipv4-ah-tunnel-sha1", IPSEC_PROTO_AH, IPSEC_TUNNEL,
+		0, IPSEC_HMAC_SHA1, 0x6102, 1102, 2102,
+		ipsec_inet_addr("10.0.0.10"), ipsec_inet_addr("10.0.0.20"),
+		ipsec_inet_addr("192.168.10.1"), ipsec_inet_addr("192.168.20.1"));
 
-	test_case = &cases[2];
-	packet_dump_init_case(test_case, "ipv6-ah-tunnel", IPSEC_AF_INET6, IPSEC_PROTO_AH, IPSEC_TUNNEL);
-	memcpy(test_case->outer_src_ipv6, packet_dump_ipv6_tunnel_src, sizeof(test_case->outer_src_ipv6));
-	memcpy(test_case->outer_dst_ipv6, packet_dump_ipv6_tunnel_dst, sizeof(test_case->outer_dst_ipv6));
-	packet_dump_init_ipv6_tcp_packet(test_case->original, packet_dump_ipv6_transport_src, packet_dump_ipv6_transport_dst, 4444, 5555);
-	test_case->original_len = IPSEC_IPV6_HDR_SIZE + (int)sizeof(ipsec_tcp_header);
-	test_case->outbound_sa = packet_dump_make_ipv6_ah_sa(0x5201, IPSEC_TUNNEL, test_case->outer_dst_ipv6);
-	test_case->inbound_sa_template = packet_dump_make_ipv6_ah_sa(0x5201, IPSEC_TUNNEL, test_case->outer_dst_ipv6);
-	ipsec_spd_set_ipv6(&test_case->outbound_spd, packet_dump_ipv6_transport_src, packet_dump_mask_full, packet_dump_ipv6_transport_dst, packet_dump_mask_full);
-	test_case->outbound_spd.protocol = IPSEC_PROTO_TCP;
-	test_case->outbound_spd.src_port = ipsec_htons(4444);
-	test_case->outbound_spd.dest_port = ipsec_htons(5555);
-	test_case->outbound_spd.policy = POLICY_APPLY;
-	test_case->outbound_spd.use_flag = IPSEC_USED;
-	ipsec_spd_set_ipv6(&test_case->inbound_spd_template, packet_dump_ipv6_transport_src, packet_dump_mask_full, packet_dump_ipv6_transport_dst, packet_dump_mask_full);
-	test_case->inbound_spd_template.protocol = IPSEC_PROTO_TCP;
-	test_case->inbound_spd_template.src_port = ipsec_htons(4444);
-	test_case->inbound_spd_template.dest_port = ipsec_htons(5555);
-	test_case->inbound_spd_template.policy = POLICY_APPLY;
-	test_case->inbound_spd_template.use_flag = IPSEC_USED;
+	packet_dump_set_case_ipv6(&cases[2], "ipv6-ah-transport-sha1", IPSEC_PROTO_AH, IPSEC_TRANSPORT,
+		0, IPSEC_HMAC_SHA1, 0x6103, 1103, 2103,
+		packet_dump_ipv6_transport_src, packet_dump_ipv6_transport_dst,
+		packet_dump_ipv6_transport_src, packet_dump_ipv6_transport_dst);
 
-	test_case = &cases[3];
-	packet_dump_init_case(test_case, "ipv6-esp-tunnel", IPSEC_AF_INET6, IPSEC_PROTO_ESP, IPSEC_TUNNEL);
-	memcpy(test_case->outer_src_ipv6, packet_dump_ipv6_tunnel_src, sizeof(test_case->outer_src_ipv6));
-	memcpy(test_case->outer_dst_ipv6, packet_dump_ipv6_tunnel_dst, sizeof(test_case->outer_dst_ipv6));
-	packet_dump_init_ipv6_tcp_packet(test_case->original, packet_dump_ipv6_transport_src, packet_dump_ipv6_transport_dst, 6666, 7777);
-	test_case->original_len = IPSEC_IPV6_HDR_SIZE + (int)sizeof(ipsec_tcp_header);
-	test_case->outbound_sa = packet_dump_make_ipv6_esp_sa(0x5202, IPSEC_TUNNEL, test_case->outer_dst_ipv6);
-	test_case->inbound_sa_template = packet_dump_make_ipv6_esp_sa(0x5202, IPSEC_TUNNEL, test_case->outer_dst_ipv6);
-	ipsec_spd_set_ipv6(&test_case->outbound_spd, packet_dump_ipv6_transport_src, packet_dump_mask_full, packet_dump_ipv6_transport_dst, packet_dump_mask_full);
-	test_case->outbound_spd.protocol = IPSEC_PROTO_TCP;
-	test_case->outbound_spd.src_port = ipsec_htons(6666);
-	test_case->outbound_spd.dest_port = ipsec_htons(7777);
-	test_case->outbound_spd.policy = POLICY_APPLY;
-	test_case->outbound_spd.use_flag = IPSEC_USED;
-	ipsec_spd_set_ipv6(&test_case->inbound_spd_template, packet_dump_ipv6_transport_src, packet_dump_mask_full, packet_dump_ipv6_transport_dst, packet_dump_mask_full);
-	test_case->inbound_spd_template.protocol = IPSEC_PROTO_TCP;
-	test_case->inbound_spd_template.src_port = ipsec_htons(6666);
-	test_case->inbound_spd_template.dest_port = ipsec_htons(7777);
-	test_case->inbound_spd_template.policy = POLICY_APPLY;
-	test_case->inbound_spd_template.use_flag = IPSEC_USED;
+	packet_dump_set_case_ipv6(&cases[3], "ipv6-ah-tunnel-md5", IPSEC_PROTO_AH, IPSEC_TUNNEL,
+		0, IPSEC_HMAC_MD5, 0x6104, 1104, 2104,
+		packet_dump_ipv6_transport_src, packet_dump_ipv6_transport_dst,
+		packet_dump_ipv6_tunnel_src, packet_dump_ipv6_tunnel_dst);
 
-	for(test_case = cases; test_case < cases + *case_count; ++test_case)
+	packet_dump_set_case_ipv4(&cases[4], "ipv4-esp-transport-aes", IPSEC_PROTO_ESP, IPSEC_TRANSPORT,
+		IPSEC_AES_CBC, 0, 0x6201, 1201, 2201,
+		ipsec_inet_addr("192.168.2.10"), ipsec_inet_addr("192.168.2.20"),
+		ipsec_inet_addr("192.168.2.10"), ipsec_inet_addr("192.168.2.20"));
+
+	packet_dump_set_case_ipv4(&cases[5], "ipv4-esp-transport-aes-sha1", IPSEC_PROTO_ESP, IPSEC_TRANSPORT,
+		IPSEC_AES_CBC, IPSEC_HMAC_SHA1, 0x6202, 1202, 2202,
+		ipsec_inet_addr("192.168.3.10"), ipsec_inet_addr("192.168.3.20"),
+		ipsec_inet_addr("192.168.3.10"), ipsec_inet_addr("192.168.3.20"));
+
+	packet_dump_set_case_ipv4(&cases[6], "ipv4-esp-tunnel-3des", IPSEC_PROTO_ESP, IPSEC_TUNNEL,
+		IPSEC_3DES, 0, 0x6203, 1203, 2203,
+		ipsec_inet_addr("10.1.0.10"), ipsec_inet_addr("10.1.0.20"),
+		ipsec_inet_addr("192.168.30.1"), ipsec_inet_addr("192.168.40.1"));
+
+	packet_dump_set_case_ipv6(&cases[7], "ipv6-esp-transport-aes-sha1", IPSEC_PROTO_ESP, IPSEC_TRANSPORT,
+		IPSEC_AES_CBC, IPSEC_HMAC_SHA1, 0x6204, 1204, 2204,
+		packet_dump_ipv6_transport_src, packet_dump_ipv6_transport_dst,
+		packet_dump_ipv6_transport_src, packet_dump_ipv6_transport_dst);
+
+	packet_dump_set_case_ipv6(&cases[8], "ipv6-esp-tunnel-3des", IPSEC_PROTO_ESP, IPSEC_TUNNEL,
+		IPSEC_3DES, 0, 0x6205, 1205, 2205,
+		packet_dump_ipv6_transport_src, packet_dump_ipv6_transport_dst,
+		packet_dump_ipv6_tunnel_src, packet_dump_ipv6_tunnel_dst);
+
+	packet_dump_set_case_ipv6(&cases[9], "ipv6-esp-tunnel-aes-sha1", IPSEC_PROTO_ESP, IPSEC_TUNNEL,
+		IPSEC_AES_CBC, IPSEC_HMAC_SHA1, 0x6206, 1206, 2206,
+		packet_dump_ipv6_transport_src, packet_dump_ipv6_transport_dst,
+		packet_dump_ipv6_tunnel_src, packet_dump_ipv6_tunnel_dst);
+
+	for(index = 0; index < PACKET_DUMP_CASE_COUNT; index++)
 	{
-		ipsec_sad_reset_replay(&test_case->outbound_sa);
-		ipsec_sad_reset_replay(&test_case->inbound_sa_template);
-		test_case->inbound_sa_template.sequence_number = 0;
-		ipsec_spd_add_sa(&test_case->outbound_spd, &test_case->outbound_sa);
+		packet_dump_prepare_label(&cases[index], labels[index], sizeof(labels[index]));
 	}
+}
+
+static char *packet_dump_label_path(const char *pcap_path)
+{
+	size_t len;
+	char *path;
+
+	len = strlen(pcap_path) + strlen(".labels.txt") + 1;
+	path = (char *)malloc(len);
+	if(path == NULL)
+	{
+		return NULL;
+	}
+
+	_snprintf(path, len, "%s.labels.txt", pcap_path);
+	path[len - 1] = '\0';
+	return path;
 }
 
 static int packet_dump_write_pcap_header(FILE *stream)
@@ -375,12 +501,50 @@ static int packet_dump_write_record(FILE *stream, const unsigned char *packet, i
 	return fwrite(packet, (size_t)packet_len, 1, stream) == 1 ? 0 : 1;
 }
 
+static int packet_dump_write_labels(const char *pcap_path, packet_dump_case *cases, const int *packet_lengths, size_t case_count)
+{
+	FILE *stream;
+	char *label_path;
+	size_t index;
+
+	label_path = packet_dump_label_path(pcap_path);
+	if(label_path == NULL)
+	{
+		fprintf(stderr, "failed to build label path\n");
+		return 1;
+	}
+
+	stream = fopen(label_path, "wb");
+	if(stream == NULL)
+	{
+		fprintf(stderr, "failed to open label file: %s\n", label_path);
+		free(label_path);
+		return 1;
+	}
+
+	for(index = 0; index < case_count; index++)
+	{
+		fprintf(stream,
+			"frame=%lu bytes=%d family=%s label=%s\n",
+			(unsigned long)(index + 1),
+			packet_lengths[index],
+			packet_dump_family_name(cases[index].family),
+			cases[index].label);
+	}
+
+	fclose(stream);
+	printf("wrote labels %s\n", label_path);
+	free(label_path);
+	return 0;
+}
+
 static int packet_dump_generate(const char *path)
 {
-	packet_dump_case cases[4];
+	packet_dump_case cases[PACKET_DUMP_CASE_COUNT];
 	size_t case_count;
 	FILE *stream;
 	size_t index;
+	int packet_lengths[PACKET_DUMP_CASE_COUNT];
 
 	packet_dump_prepare_cases(cases, &case_count);
 	stream = fopen(path, "wb");
@@ -438,11 +602,12 @@ static int packet_dump_generate(const char *path)
 			return 1;
 		}
 
-		printf("wrote %s (%d bytes)\n", test_case->name, payload_len);
+		packet_lengths[index] = payload_len;
+		printf("wrote %s (%d bytes)\n", test_case->label, payload_len);
 	}
 
 	fclose(stream);
-	return 0;
+	return packet_dump_write_labels(path, cases, packet_lengths, case_count);
 }
 
 static int packet_dump_prepare_verify_db(const packet_dump_case *cases, size_t case_count,
@@ -507,7 +672,7 @@ static int packet_dump_prepare_verify_db(const packet_dump_case *cases, size_t c
 
 static int packet_dump_verify(const char *path)
 {
-	packet_dump_case cases[4];
+	packet_dump_case cases[PACKET_DUMP_CASE_COUNT];
 	size_t case_count;
 	FILE *stream;
 	packet_dump_pcap_header pcap_header;
@@ -586,7 +751,7 @@ static int packet_dump_verify(const char *path)
 		status = ipsec_input(packet_buffer, (int)record_header.incl_len, &payload_offset, &payload_len, databases);
 		if(status != IPSEC_STATUS_SUCCESS)
 		{
-			fprintf(stderr, "verification failed for %s: %d\n", test_case->name, status);
+			fprintf(stderr, "verification failed for %s: %d\n", test_case->label, status);
 			ipsec_spd_release_dbs(databases);
 			fclose(stream);
 			return 1;
@@ -594,13 +759,13 @@ static int packet_dump_verify(const char *path)
 
 		if((payload_len != test_case->original_len) || (memcmp(packet_buffer + payload_offset, test_case->original, (size_t)test_case->original_len) != 0))
 		{
-			fprintf(stderr, "roundtrip mismatch for %s\n", test_case->name);
+			fprintf(stderr, "roundtrip mismatch for %s\n", test_case->label);
 			ipsec_spd_release_dbs(databases);
 			fclose(stream);
 			return 1;
 		}
 
-		printf("verified %s\n", test_case->name);
+		printf("verified %s\n", test_case->label);
 	}
 
 	if(fgetc(stream) != EOF)
