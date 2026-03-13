@@ -69,6 +69,7 @@ extern void serinit(void) ;
 #endif
 
 /* declare all test functions here */
+extern void aes_test(test_result *);
 extern void util_debug_test(test_result *);
 extern void des_test(test_result *);
 extern void md5_test(test_result *);
@@ -87,6 +88,7 @@ typedef struct test_set_struct
 
 test_set test_function_set[] = 
 {
+			{ aes_test, 		"aes_test"			},
 			{ util_debug_test, 	"util_debug_test"	},
 			{ des_test, 		"des_test"			},
 			{ md5_test, 		"md5_test"			}, 

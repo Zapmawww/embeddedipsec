@@ -1192,7 +1192,23 @@ void ipsec_sad_print_single(sad_entry *entry)
 	if (entry->protocol == IPSEC_PROTO_AH)
 		strcpy(crypto, entry->auth_alg == IPSEC_HMAC_MD5 ? " MD5" : "SHA1") ;
 	else
-		strcpy(crypto, entry->enc_alg == IPSEC_DES ? " DES" : "3DES") ;
+	{
+		switch(entry->enc_alg)
+		{
+			case IPSEC_DES:
+				strcpy(crypto, " DES");
+				break;
+			case IPSEC_3DES:
+				strcpy(crypto, "3DES");
+				break;
+			case IPSEC_AES_CBC:
+				strcpy(crypto, " AES");
+				break;
+			default:
+				strcpy(crypto, " ????");
+				break;
+		}
+	}
 
 	sprintf(log_message, 	"%15s/%15s %4s %5s  %4s   %10lu %5d %10lu %4d %8x 0x%p ",
        						dest, 

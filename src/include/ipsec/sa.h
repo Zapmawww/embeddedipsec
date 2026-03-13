@@ -62,6 +62,7 @@
 #define IPSEC_DES				(1)		/**< Defines DES as the encryption algorithm for an ESP packet */
 #define IPSEC_3DES				(2)		/**< Defines 3DES as the encryption algorithm for an ESP packet */
 #define IPSEC_IDEA				(3)		/**< Defines IDEA as the encryption algorithm for an ESP packet */
+#define IPSEC_AES_CBC			(4)		/**< Defines AES-128-CBC as the encryption algorithm for an ESP packet */
 
 #define IPSEC_HMAC_MD5			(1)		/**< Defines HMAC-MD5 as the authentication algorithm for an AH or an ESP packet */
 #define IPSEC_HMAC_SHA1			(2)		/**< Defines HMAC-SHA1 as the authentication algorithm for an AH or an ESP packet */
@@ -97,7 +98,7 @@ struct sa_entry_struct
 	__u8		addr_family ;					/**< IPSEC_AF_INET or IPSEC_AF_INET6 */
 	__u8		dest_ipv6[16] ;				/**< IPv6 destination address */
 	__u8		dest_netaddr_ipv6[16] ;		/**< IPv6 destination prefix mask */
-	/**@todo IV for cbc-mode should be added to this structure */
+	/**@todo per-SA IV generation should be added to this structure */
 	/**@todo enc_alg and auth_alg should be replced by function pointers */
 };
 

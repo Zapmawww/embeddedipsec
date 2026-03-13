@@ -64,6 +64,7 @@
 #include "ipsec/util.h"
 #include "ipsec/debug.h"
 
+#include "ipsec/aes_cbc.h"
 #include "ipsec/sa.h"
 #include "ipsec/des.h"
 #include "ipsec/md5.h"
@@ -79,7 +80,7 @@ __u32 ipsec_esp_lastSeq	= 0;         		/**< save session state to detect replays
 											 *   Note: must be initialized with zero (0x00000000) when
 											 *         a new SA is established! */
 
-static __u8 ipsec_esp_get_padding(int len);
+static __u8 ipsec_esp_get_padding(int len, __u8 block_len);
 
 static void ipsec_esp_finalize_packet(void *packet, int total_len, __u8 protocol)
 {
@@ -117,6 +118,70 @@ static void ipsec_esp_init_outer_ipv6(ipsec_ipv6_header *header, int total_len, 
 	memcpy(header->dest, dst, 16);
 }
 
+static __u8 ipsec_esp_iv_size(__u8 enc_alg)
+{
+	switch(enc_alg)
+	{
+		case IPSEC_3DES:
+			return IPSEC_ESP_3DES_IV_SIZE;
+		case IPSEC_AES_CBC:
+			return IPSEC_ESP_AES_CBC_IV_SIZE;
+		default:
+			return 0;
+	}
+}
+
+static __u8 ipsec_esp_block_size(__u8 enc_alg)
+{
+	switch(enc_alg)
+	{
+		case IPSEC_3DES:
+			return IPSEC_ESP_3DES_IV_SIZE;
+		case IPSEC_AES_CBC:
+			return IPSEC_AES_CBC_BLOCK_SIZE;
+		default:
+			return 0;
+	}
+}
+
+static ipsec_status ipsec_esp_encrypt_payload(__u8 enc_alg, __u8 *payload, int payload_len, const __u8 *key, const __u8 *iv)
+{
+	if(enc_alg == IPSEC_3DES)
+	{
+		__u8 cbc_iv[IPSEC_ESP_3DES_IV_SIZE];
+
+		memcpy(cbc_iv, iv, sizeof(cbc_iv));
+		cipher_3des_cbc(payload, payload_len, (__u8 *)key, cbc_iv, DES_ENCRYPT, payload);
+		return IPSEC_STATUS_SUCCESS;
+	}
+
+	if(enc_alg == IPSEC_AES_CBC)
+	{
+		return ipsec_aes_cbc_encrypt_buffer(payload, payload_len, key, iv);
+	}
+
+	return IPSEC_STATUS_NOT_IMPLEMENTED;
+}
+
+static ipsec_status ipsec_esp_decrypt_payload(__u8 enc_alg, __u8 *payload, int payload_len, const __u8 *key, const __u8 *iv)
+{
+	if(enc_alg == IPSEC_3DES)
+	{
+		__u8 cbc_iv[IPSEC_ESP_3DES_IV_SIZE];
+
+		memcpy(cbc_iv, iv, sizeof(cbc_iv));
+		cipher_3des_cbc(payload, payload_len, (__u8 *)key, cbc_iv, DES_DECRYPT, payload);
+		return IPSEC_STATUS_SUCCESS;
+	}
+
+	if(enc_alg == IPSEC_AES_CBC)
+	{
+		return ipsec_aes_cbc_decrypt_buffer(payload, payload_len, key, iv);
+	}
+
+	return IPSEC_STATUS_NOT_IMPLEMENTED;
+}
+
 static ipsec_status ipsec_esp_encapsulate_common(void *packet, int *offset, int *len, sad_entry *sa,
 									 __u8 outer_family, const void *src_addr, const void *dest_addr)
 {
@@ -139,13 +204,15 @@ static ipsec_status ipsec_esp_encapsulate_common(void *packet, int *offset, int 
 	int payload_offset;
 	#endif
 	int payload_len;
+	__u8 iv_len;
+	__u8 block_len;
 	__u8 padd_len;
 	__u8 *pos;
 	__u8 padd;
 	__u8 original_protocol;
 	ipsec_esp_header *new_esp_header;
-	unsigned char iv[IPSEC_ESP_IV_SIZE] = {0xD4, 0xDB, 0xAB, 0x9A, 0x9A, 0xDB, 0xD1, 0x94};
-	unsigned char cbc_iv[IPSEC_ESP_IV_SIZE];
+	unsigned char iv[IPSEC_ESP_MAX_IV_SIZE] = {0xD4, 0xDB, 0xAB, 0x9A, 0x9A, 0xDB, 0xD1, 0x94,
+									0x4A, 0x7C, 0x13, 0xE2, 0x55, 0x99, 0x24, 0x6F};
 	unsigned char digest[IPSEC_MAX_AUTHKEY_LEN];
 	#if IPSEC_ENABLE_TUNNEL_MODE
 	__u8 next_proto;
@@ -155,6 +222,13 @@ static ipsec_status ipsec_esp_encapsulate_common(void *packet, int *offset, int 
 	inner_len = ipsec_packet_total_len(packet);
 	ip_header_len = ipsec_packet_header_len(packet);
 	original_protocol = ipsec_packet_protocol(packet);
+	iv_len = ipsec_esp_iv_size(sa->enc_alg);
+	block_len = ipsec_esp_block_size(sa->enc_alg);
+
+	if((iv_len == 0) || (block_len == 0))
+	{
+		return IPSEC_STATUS_NOT_IMPLEMENTED;
+	}
 
 	if(ipsec_packet_hop_limit(packet) == 0)
 	{
@@ -167,13 +241,13 @@ static ipsec_status ipsec_esp_encapsulate_common(void *packet, int *offset, int 
 		return IPSEC_STATUS_NOT_IMPLEMENTED;
 		#else
 		transport_len = inner_len - ip_header_len;
-		padd_len = ipsec_esp_get_padding(transport_len + 2);
+		padd_len = ipsec_esp_get_padding(transport_len + 2, block_len);
 		new_esp_header = (ipsec_esp_header *)(((unsigned char *)packet) + ip_header_len);
-		memmove(((unsigned char *)packet) + ip_header_len + IPSEC_ESP_HDR_SIZE + IPSEC_ESP_IV_SIZE,
+		memmove(((unsigned char *)packet) + ip_header_len + IPSEC_ESP_HDR_SIZE + iv_len,
 				((unsigned char *)packet) + ip_header_len,
 				transport_len);
 
-		pos = ((__u8 *)packet) + ip_header_len + IPSEC_ESP_HDR_SIZE + IPSEC_ESP_IV_SIZE + transport_len;
+		pos = ((__u8 *)packet) + ip_header_len + IPSEC_ESP_HDR_SIZE + iv_len + transport_len;
 		if(padd_len != 0)
 		{
 			padd = 1;
@@ -185,17 +259,19 @@ static ipsec_status ipsec_esp_encapsulate_common(void *packet, int *offset, int 
 
 		*pos++ = padd_len;
 		*pos = original_protocol;
-		payload_len = IPSEC_ESP_HDR_SIZE + IPSEC_ESP_IV_SIZE + transport_len + padd_len + 2;
+		payload_len = IPSEC_ESP_HDR_SIZE + iv_len + transport_len + padd_len + 2;
 
-		if(sa->enc_alg == IPSEC_3DES)
+		ret_val = ipsec_esp_encrypt_payload(sa->enc_alg,
+			(__u8 *)packet + ip_header_len + IPSEC_ESP_HDR_SIZE + iv_len,
+			transport_len + padd_len + 2,
+			sa->enckey,
+			iv);
+		if(ret_val != IPSEC_STATUS_SUCCESS)
 		{
-			memcpy(cbc_iv, iv, IPSEC_ESP_IV_SIZE);
-			cipher_3des_cbc((__u8 *)packet + ip_header_len + IPSEC_ESP_HDR_SIZE + IPSEC_ESP_IV_SIZE,
-					 transport_len + padd_len + 2, (__u8 *)sa->enckey, (__u8 *)&cbc_iv,
-					 DES_ENCRYPT, (__u8 *)packet + ip_header_len + IPSEC_ESP_HDR_SIZE + IPSEC_ESP_IV_SIZE);
+			return ret_val;
 		}
 
-		memcpy(((__u8 *)packet) + ip_header_len + IPSEC_ESP_HDR_SIZE, iv, IPSEC_ESP_IV_SIZE);
+		memcpy(((__u8 *)packet) + ip_header_len + IPSEC_ESP_HDR_SIZE, iv, iv_len);
 		new_esp_header->spi = sa->spi;
 		sa->sequence_number++;
 		new_esp_header->sequence_number = ipsec_htonl(sa->sequence_number);
@@ -233,10 +309,10 @@ static ipsec_status ipsec_esp_encapsulate_common(void *packet, int *offset, int 
 	return IPSEC_STATUS_NOT_IMPLEMENTED;
 	#else
 
-	new_esp_header = (ipsec_esp_header *)(((char *)packet) - IPSEC_ESP_IV_SIZE - IPSEC_ESP_HDR_SIZE);
-	payload_offset = (((char *)packet) - (((char *)packet) - IPSEC_ESP_IV_SIZE - IPSEC_ESP_HDR_SIZE - outer_header_len));
+	new_esp_header = (ipsec_esp_header *)(((char *)packet) - iv_len - IPSEC_ESP_HDR_SIZE);
+	payload_offset = (((char *)packet) - (((char *)packet) - iv_len - IPSEC_ESP_HDR_SIZE - outer_header_len));
 
-	padd_len = ipsec_esp_get_padding(inner_len + 2);
+	padd_len = ipsec_esp_get_padding(inner_len + 2, block_len);
 	pos = ((__u8 *)packet) + inner_len;
 	if(padd_len != 0)
 	{
@@ -251,16 +327,19 @@ static ipsec_status ipsec_esp_encapsulate_common(void *packet, int *offset, int 
 	next_proto = ipsec_packet_family(packet) == IPSEC_AF_INET6 ? IPSEC_PROTO_IPV6 : IPSEC_PROTO_IPIP;
 	*pos = next_proto;
 
-	payload_len = inner_len + IPSEC_ESP_HDR_SIZE + IPSEC_ESP_IV_SIZE + padd_len + 2;
+	payload_len = inner_len + IPSEC_ESP_HDR_SIZE + iv_len + padd_len + 2;
 
-	if(sa->enc_alg == IPSEC_3DES)
+	ret_val = ipsec_esp_encrypt_payload(sa->enc_alg,
+		(__u8 *)packet,
+		inner_len + padd_len + 2,
+		sa->enckey,
+		iv);
+	if(ret_val != IPSEC_STATUS_SUCCESS)
 	{
-		memcpy(cbc_iv, iv, IPSEC_ESP_IV_SIZE);
-		cipher_3des_cbc((__u8 *)packet, inner_len + padd_len + 2, (__u8 *)sa->enckey, (__u8 *)&cbc_iv,
-					 DES_ENCRYPT, (__u8 *)packet);
+		return ret_val;
 	}
 
-	memcpy(((__u8 *)packet) - IPSEC_ESP_IV_SIZE, iv, IPSEC_ESP_IV_SIZE);
+	memcpy(((__u8 *)packet) - iv_len, iv, iv_len);
 
 	new_esp_header->spi = sa->spi;
 	sa->sequence_number++;
@@ -289,14 +368,14 @@ static ipsec_status ipsec_esp_encapsulate_common(void *packet, int *offset, int 
 
 	if(outer_family == IPSEC_AF_INET6)
 	{
-		ipsec_esp_init_outer_ipv6((ipsec_ipv6_header *)(((char *)packet) - IPSEC_ESP_IV_SIZE - IPSEC_ESP_HDR_SIZE - outer_header_len),
+		ipsec_esp_init_outer_ipv6((ipsec_ipv6_header *)(((char *)packet) - iv_len - IPSEC_ESP_HDR_SIZE - outer_header_len),
 								    payload_len + outer_header_len,
 								    (const __u8 *)src_addr, (const __u8 *)dest_addr);
 	}
 	else
 	{
 		ipsec_ip_header *new_ip_header;
-		new_ip_header = (ipsec_ip_header *)(((char *)packet) - IPSEC_ESP_IV_SIZE - IPSEC_ESP_HDR_SIZE - outer_header_len);
+		new_ip_header = (ipsec_ip_header *)(((char *)packet) - iv_len - IPSEC_ESP_HDR_SIZE - outer_header_len);
 		ipsec_esp_init_outer_ipv4(new_ip_header, payload_len + outer_header_len,
 								  *((const __u32 *)src_addr), *((const __u32 *)dest_addr));
 		new_ip_header->chksum = ipsec_ip_chksum(new_ip_header, sizeof(ipsec_ip_header));
@@ -317,12 +396,12 @@ static ipsec_status ipsec_esp_encapsulate_common(void *packet, int *offset, int 
  * @param	len		the length of the packet
  * @return	the length of padding needed
  */
-__u8 ipsec_esp_get_padding(int len)
+__u8 ipsec_esp_get_padding(int len, __u8 block_len)
 {
 	int padding ;
 
-	for(padding = 0; padding < 8; padding++)
-		if(((len+padding) % 8) == 0)
+	for(padding = 0; padding < block_len; padding++)
+		if(((len+padding) % block_len) == 0)
 			break ;
 	return padding ;
 }
@@ -356,12 +435,13 @@ ipsec_status ipsec_esp_decapsulate(void *packet, int *offset, int *len, sad_entr
 	void				*new_ip_packet ;
 	#endif
 	esp_packet			*esp_header ;			
-	char 				cbc_iv[IPSEC_ESP_IV_SIZE] ;
+	char 				cbc_iv[IPSEC_ESP_MAX_IV_SIZE] ;
 	unsigned char 		digest[IPSEC_MAX_AUTHKEY_LEN];
 	int				packet_len;
 	int				transport_len;
 	__u8				pad_len;
 	__u8				next_proto;
+	__u8				iv_len;
 
 	IPSEC_LOG_TRC(IPSEC_TRACE_ENTER, 
 	              "ipsec_esp_decapsulate", 
@@ -374,6 +454,13 @@ ipsec_status ipsec_esp_decapsulate(void *packet, int *offset, int *len, sad_entr
 	payload_offset = ip_header_len + IPSEC_ESP_SPI_SIZE + IPSEC_ESP_SEQ_SIZE ;
 	payload_len = ipsec_packet_total_len(packet) - ip_header_len - IPSEC_ESP_HDR_SIZE ;
 	packet_len = ipsec_packet_total_len(packet);
+	iv_len = ipsec_esp_iv_size(sa->enc_alg);
+
+	if(iv_len == 0)
+	{
+		IPSEC_LOG_TRC(IPSEC_TRACE_RETURN, "ipsec_esp_decapsulate", ("return = %d", IPSEC_STATUS_NOT_IMPLEMENTED) );
+		return IPSEC_STATUS_NOT_IMPLEMENTED;
+	}
 
 
 	if(sa->auth_alg != 0)
@@ -429,14 +516,16 @@ ipsec_status ipsec_esp_decapsulate(void *packet, int *offset, int *len, sad_entr
 
 
 	/* decapsulate the packet according the SA */
-	if(sa->enc_alg == IPSEC_3DES)
+	memcpy(cbc_iv, ((char*)packet)+payload_offset, iv_len);
+	ret_val = ipsec_esp_decrypt_payload(sa->enc_alg,
+		(__u8 *)packet + payload_offset + iv_len,
+		payload_len - iv_len,
+		sa->enckey,
+		(__u8 *)cbc_iv);
+	if(ret_val != IPSEC_STATUS_SUCCESS)
 	{
-		/* copy IV from ESP payload */
-		memcpy(cbc_iv, ((char*)packet)+payload_offset, IPSEC_ESP_IV_SIZE);
-
-		/* decrypt ESP packet */
-		cipher_3des_cbc(((char*)packet)+payload_offset + IPSEC_ESP_IV_SIZE, payload_len-IPSEC_ESP_IV_SIZE, (unsigned char *)sa->enckey, (char*)&cbc_iv,
-						 DES_DECRYPT, ((char*)packet)+payload_offset + IPSEC_ESP_IV_SIZE);
+		IPSEC_LOG_TRC(IPSEC_TRACE_RETURN, "ipsec_esp_decapsulate", ("return = %d", ret_val) );
+		return ret_val;
 	}
 
 	if(sa->mode == IPSEC_TRANSPORT)
@@ -445,12 +534,12 @@ ipsec_status ipsec_esp_decapsulate(void *packet, int *offset, int *len, sad_entr
 		IPSEC_LOG_TRC(IPSEC_TRACE_RETURN, "ipsec_esp_decapsulate", ("return = %d", IPSEC_STATUS_NOT_IMPLEMENTED) );
 		return IPSEC_STATUS_NOT_IMPLEMENTED;
 		#else
-		transport_len = payload_len - IPSEC_ESP_IV_SIZE;
-		pad_len = *(((unsigned char *)packet) + payload_offset + IPSEC_ESP_IV_SIZE + transport_len - 2);
-		next_proto = *(((unsigned char *)packet) + payload_offset + IPSEC_ESP_IV_SIZE + transport_len - 1);
+		transport_len = payload_len - iv_len;
+		pad_len = *(((unsigned char *)packet) + payload_offset + iv_len + transport_len - 2);
+		next_proto = *(((unsigned char *)packet) + payload_offset + iv_len + transport_len - 1);
 		local_len = ip_header_len + transport_len - pad_len - 2;
 		memmove(((unsigned char *)packet) + ip_header_len,
-				((unsigned char *)packet) + payload_offset + IPSEC_ESP_IV_SIZE,
+				((unsigned char *)packet) + payload_offset + iv_len,
 				local_len - ip_header_len);
 		ipsec_esp_finalize_packet(packet, local_len, next_proto);
 		*offset = 0;
@@ -470,9 +559,9 @@ ipsec_status ipsec_esp_decapsulate(void *packet, int *offset, int *len, sad_entr
 	return IPSEC_STATUS_NOT_IMPLEMENTED;
 	#else
 
-	*offset = payload_offset+IPSEC_ESP_IV_SIZE ;
+	*offset = payload_offset+iv_len ;
 
-	new_ip_packet = (void *)(((char*)packet) + payload_offset + IPSEC_ESP_IV_SIZE) ;
+	new_ip_packet = (void *)(((char*)packet) + payload_offset + iv_len) ;
 	local_len = ipsec_packet_total_len(new_ip_packet) ;
 
 	if( (local_len < IPSEC_MIN_IPHDR_SIZE) || (local_len > IPSEC_MTU))

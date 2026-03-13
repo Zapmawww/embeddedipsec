@@ -45,7 +45,10 @@
 
 #include "ipsec/sa.h"
 
-#define IPSEC_ESP_IV_SIZE		(8)			/**< Defines the size (in bytes) of the Initialization Vector used by DES and 3DES */
+#define IPSEC_ESP_3DES_IV_SIZE	(8)			/**< Defines the IV size (in bytes) used by DES and 3DES */
+#define IPSEC_ESP_AES_CBC_IV_SIZE	(16)		/**< Defines the IV size (in bytes) used by AES-CBC */
+#define IPSEC_ESP_MAX_IV_SIZE	(IPSEC_ESP_AES_CBC_IV_SIZE)	/**< Defines the maximum ESP IV size supported by the library */
+#define IPSEC_ESP_IV_SIZE		(IPSEC_ESP_3DES_IV_SIZE)	/**< Backward-compatible alias for legacy DES/3DES-only code */
 #define IPSEC_ESP_SPI_SIZE		(4)			/**< Defines the size (in bytes) of the SPI of an ESP packet */
 #define IPSEC_ESP_SEQ_SIZE		(4)			/**< Defines the size (in bytes) of the Sequence Number of an ESP packet */
 #define IPSEC_ESP_HDR_SIZE		(IPSEC_ESP_SPI_SIZE+IPSEC_ESP_SEQ_SIZE)	/**< Defines the size (in bytes) of the ESP header. Actually it defines just the size of the header which is located in */

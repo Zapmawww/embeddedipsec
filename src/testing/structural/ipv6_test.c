@@ -29,6 +29,7 @@
 
 #include <string.h>
 
+#include "ipsec/aes_cbc.h"
 #include "ipsec/ah.h"
 #include "ipsec/debug.h"
 #include "ipsec/esp.h"
@@ -98,10 +99,10 @@ static sad_entry ipv6_test_make_esp_sa(void)
 	sad_entry sa = { SAD_ENTRY(0,0,0,0, 0,0,0,0,
 						  0x2202,
 						  IPSEC_PROTO_ESP, IPSEC_TUNNEL,
-						  IPSEC_3DES,
-						  0x01, 0x23, 0x45, 0x67, 0x01, 0x23, 0x45, 0x67,
-						  0x01, 0x23, 0x45, 0x67, 0x01, 0x23, 0x45, 0x67,
-						  0x01, 0x23, 0x45, 0x67, 0x01, 0x23, 0x45, 0x67,
+						  IPSEC_AES_CBC,
+						  0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6,
+						  0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf, 0x4f, 0x3c,
+						  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 						  0,
 						  0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 						  0, 0, 0, 0, 0, 0, 0, 0, 0, 0) };
@@ -301,7 +302,7 @@ static int ipv6_test_esp_roundtrip(void)
 	}
 
 	outer_packet = packet + enc_offset;
-	if((enc_offset != -56) || (enc_len != 120))
+	if((enc_offset != -64) || (enc_len != 128))
 	{
 		local_error_count++;
 		IPSEC_LOG_TST("ipv6_test_esp_roundtrip", "FAILURE", ("ESP IPv6 encapsulation returned unexpected offset or length"));
@@ -321,7 +322,7 @@ static int ipv6_test_esp_roundtrip(void)
 		return local_error_count;
 	}
 
-	if((dec_offset != 56) || (dec_len != IPV6_TEST_PACKET_SIZE))
+	if((dec_offset != 64) || (dec_len != IPV6_TEST_PACKET_SIZE))
 	{
 		local_error_count++;
 		IPSEC_LOG_TST("ipv6_test_esp_roundtrip", "FAILURE", ("ESP IPv6 decapsulation returned unexpected offset or length"));
@@ -523,7 +524,7 @@ static int ipv6_test_input_esp(void)
 		IPSEC_LOG_TST("ipv6_test_input_esp", "FAILURE", ("ipsec_input() failed for an IPv6 ESP packet"));
 	}
 
-	if((dec_offset != 56) || (dec_len != IPV6_TEST_PACKET_SIZE))
+	if((dec_offset != 64) || (dec_len != IPV6_TEST_PACKET_SIZE))
 	{
 		local_error_count++;
 		IPSEC_LOG_TST("ipv6_test_input_esp", "FAILURE", ("IPv6 ESP inbound processing returned unexpected offset or length"));

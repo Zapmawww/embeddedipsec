@@ -29,6 +29,7 @@
 
 #include <string.h>
 
+#include "ipsec/aes_cbc.h"
 #include "ipsec/ah.h"
 #include "ipsec/debug.h"
 #include "ipsec/esp.h"
@@ -64,13 +65,13 @@ static const __u8 transport_test_ipv6_dst[16] =
 	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x20
 };
 
-static __u8 transport_test_esp_padding(int len)
+static __u8 transport_test_esp_padding(int len, __u8 block_len)
 {
 	int padding;
 
-	for(padding = 0; padding < 8; padding++)
+	for(padding = 0; padding < block_len; padding++)
 	{
-		if(((len + padding) % 8) == 0)
+		if(((len + padding) % block_len) == 0)
 		{
 			return (__u8)padding;
 		}
@@ -160,10 +161,10 @@ static sad_entry transport_test_make_ipv4_esp_sa(void)
 	return (sad_entry){ SAD_ENTRY(192,168,1,20, 255,255,255,255,
 						  0x3302,
 						  IPSEC_PROTO_ESP, IPSEC_TRANSPORT,
-						  IPSEC_3DES,
-						  0x01, 0x23, 0x45, 0x67, 0x01, 0x23, 0x45, 0x67,
-						  0x01, 0x23, 0x45, 0x67, 0x01, 0x23, 0x45, 0x67,
-						  0x01, 0x23, 0x45, 0x67, 0x01, 0x23, 0x45, 0x67,
+						  IPSEC_AES_CBC,
+						  0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6,
+						  0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf, 0x4f, 0x3c,
+						  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 						  0,
 						  0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 						  0, 0, 0, 0, 0, 0, 0, 0, 0, 0) };
@@ -192,10 +193,10 @@ static sad_entry transport_test_make_ipv6_esp_sa(void)
 	sad_entry sa = { SAD_ENTRY(0,0,0,0, 0,0,0,0,
 						  0x3402,
 						  IPSEC_PROTO_ESP, IPSEC_TRANSPORT,
-						  IPSEC_3DES,
-						  0x01, 0x23, 0x45, 0x67, 0x01, 0x23, 0x45, 0x67,
-						  0x01, 0x23, 0x45, 0x67, 0x01, 0x23, 0x45, 0x67,
-						  0x01, 0x23, 0x45, 0x67, 0x01, 0x23, 0x45, 0x67,
+						  IPSEC_AES_CBC,
+						  0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6,
+						  0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf, 0x4f, 0x3c,
+						  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 						  0,
 						  0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 						  0, 0, 0, 0, 0, 0, 0, 0, 0, 0) };
@@ -346,7 +347,7 @@ static int transport_test_ipv4_esp(void)
 	packet = buffer + TRANSPORT_TEST_HEADROOM;
 	memcpy(packet, original, sizeof(original));
 	transport_test_reset_esp_replay();
-	padding = transport_test_esp_padding((int)sizeof(ipsec_tcp_header) + 2);
+	padding = transport_test_esp_padding((int)sizeof(ipsec_tcp_header) + 2, IPSEC_AES_CBC_BLOCK_SIZE);
 
 	outbound_sa = transport_test_make_ipv4_esp_sa();
 	inbound_sa_template = transport_test_make_ipv4_esp_sa();
@@ -382,7 +383,7 @@ static int transport_test_ipv4_esp(void)
 		return local_error_count;
 	}
 
-	if((enc_offset != 0) || (enc_len != (TRANSPORT_TEST_IPV4_PACKET_SIZE + IPSEC_ESP_HDR_SIZE + IPSEC_ESP_IV_SIZE + padding + 2)))
+	if((enc_offset != 0) || (enc_len != (TRANSPORT_TEST_IPV4_PACKET_SIZE + IPSEC_ESP_HDR_SIZE + IPSEC_ESP_AES_CBC_IV_SIZE + padding + 2)))
 	{
 		local_error_count++;
 		IPSEC_LOG_TST("transport_test_ipv4_esp", "FAILURE", ("IPv4 ESP transport encapsulation returned unexpected offset or length"));
@@ -559,7 +560,7 @@ static int transport_test_ipv6_esp(void)
 	packet = buffer + TRANSPORT_TEST_HEADROOM;
 	memcpy(packet, original, sizeof(original));
 	transport_test_reset_esp_replay();
-	padding = transport_test_esp_padding((int)sizeof(ipsec_tcp_header) + 2);
+	padding = transport_test_esp_padding((int)sizeof(ipsec_tcp_header) + 2, IPSEC_AES_CBC_BLOCK_SIZE);
 
 	outbound_sa = transport_test_make_ipv6_esp_sa();
 	inbound_sa_template = transport_test_make_ipv6_esp_sa();
@@ -600,7 +601,7 @@ static int transport_test_ipv6_esp(void)
 		return local_error_count;
 	}
 
-	if((enc_offset != 0) || (enc_len != (TRANSPORT_TEST_IPV6_PACKET_SIZE + IPSEC_ESP_HDR_SIZE + IPSEC_ESP_IV_SIZE + padding + 2)))
+	if((enc_offset != 0) || (enc_len != (TRANSPORT_TEST_IPV6_PACKET_SIZE + IPSEC_ESP_HDR_SIZE + IPSEC_ESP_AES_CBC_IV_SIZE + padding + 2)))
 	{
 		local_error_count++;
 		IPSEC_LOG_TST("transport_test_ipv6_esp", "FAILURE", ("IPv6 ESP transport encapsulation returned unexpected offset or length"));

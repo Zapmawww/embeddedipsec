@@ -79,6 +79,8 @@
 
 #define IPSEC_DES_KEY_LEN		(8)							/**< Defines the size of a DES key in bytes */
 #define IPSEC_3DES_KEY_LEN		(IPSEC_DES_KEY_LEN*3)		/**< Defines the length of a 3DES key in bytes */
+#define IPSEC_AES_CBC_KEY_LEN	(16)						/**< Defines the size of an AES-128-CBC key in bytes */
+#define IPSEC_AES_CBC_BLOCK_SIZE	(16)				/**< Defines the AES block size in bytes */
 #define IPSEC_MAX_ENCKEY_LEN	(IPSEC_3DES_KEY_LEN)		/**< Defines the maximum encryption key length of our IPsec system */
 
 #define IPSEC_AUTH_ICV			(12)						/**< Defines the authentication key length in bytes (12 bytes for 96bit keys) */

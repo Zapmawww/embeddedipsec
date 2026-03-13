@@ -41,6 +41,8 @@ else()
 endif()
 
 set(EMBEDDEDIPSEC_CORE_SOURCES
+    tiny-aes/aes.c
+    src/core/aes_cbc.c
     src/core/ah.c
     src/core/des.c
     src/core/esp.c
@@ -56,6 +58,8 @@ add_library(embeddedipsec STATIC ${EMBEDDEDIPSEC_CORE_SOURCES})
 target_include_directories(embeddedipsec
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/src/include
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/tiny-aes
 )
 
 target_compile_definitions(embeddedipsec
@@ -66,6 +70,9 @@ target_compile_definitions(embeddedipsec
         IPSEC_ENABLE_ESP=${EMBEDDEDIPSEC_ENABLE_ESP_DEFINE}
         IPSEC_ENABLE_TUNNEL_MODE=${EMBEDDEDIPSEC_ENABLE_TUNNEL_MODE_DEFINE}
         IPSEC_ENABLE_TRANSPORT_MODE=${EMBEDDEDIPSEC_ENABLE_TRANSPORT_MODE_DEFINE}
+        CBC=1
+        ECB=0
+        CTR=0
 )
 
 target_compile_features(embeddedipsec PUBLIC c_std_99)
@@ -80,6 +87,7 @@ if(EMBEDDEDIPSEC_BUILD_TESTS)
     enable_testing()
 
     add_executable(embeddedipsec_structural_tests
+        src/testing/structural/aes_test.c
         src/testing/structural/ah_test.c
         src/testing/structural/des_test.c
         src/testing/structural/esp_test.c
