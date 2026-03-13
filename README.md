@@ -23,6 +23,12 @@ Modern lwIP porting
  - `doc/lwip-porting.md` documents the intended hook points in lwIP 2.1.x and the multiple-netif integration model.
  - The legacy fake-netif adapter in `src/netif/ipsecdev.c` remains for reference, but it is not the recommended path for a modern lwIP port.
 
+Packet dump tool
+
+ - `embeddedipsec_packet_dump_tool generate <file.pcap>` writes protected raw IP packets to a PCAP file that can be opened directly in Wireshark.
+ - `embeddedipsec_packet_dump_tool verify <file.pcap>` reads the same capture back through `ipsec_input()` and checks that decapsulation recovers the expected plaintext packets.
+ - `embeddedipsec_packet_dump_tool roundtrip <file.pcap>` runs both steps and is also registered as a CTest test.
+
 Copyright (c) 2003-2004 Niklaus Schild and Christian Scheurer, HTI Biel/Bienne
 All rights reserved.
 

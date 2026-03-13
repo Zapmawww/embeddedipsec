@@ -102,5 +102,12 @@ if(EMBEDDEDIPSEC_BUILD_TESTS)
 
     target_link_libraries(embeddedipsec_structural_tests PRIVATE embeddedipsec)
 
+    add_executable(embeddedipsec_packet_dump_tool
+        src/testing/packet_dump_tool.c
+    )
+
+    target_link_libraries(embeddedipsec_packet_dump_tool PRIVATE embeddedipsec)
+
     add_test(NAME structural_tests COMMAND embeddedipsec_structural_tests)
+    add_test(NAME packet_dump_roundtrip COMMAND embeddedipsec_packet_dump_tool roundtrip ${CMAKE_CURRENT_BINARY_DIR}/embeddedipsec-sample.pcap)
 endif()
