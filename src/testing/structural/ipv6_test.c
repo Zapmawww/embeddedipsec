@@ -106,6 +106,7 @@ static sad_entry ipv6_test_make_esp_sa(void)
 	return sa;
 }
 
+/* Builds the inner IPv6 TCP packet used by both direct roundtrip and dispatcher-based tests. */
 static void ipv6_test_init_tcp_packet(unsigned char *buffer, const __u8 *src, const __u8 *dst, __u16 src_port, __u16 dst_port)
 {
 	ipsec_ipv6_header *ip6;
@@ -128,6 +129,7 @@ static void ipv6_test_init_tcp_packet(unsigned char *buffer, const __u8 *src, co
 	tcp->wnd = ipsec_htons(1024);
 }
 
+/* Confirms that IPv6 selector matching works in both SPD and SAD lookup paths. */
 static int ipv6_test_spd_sad_lookup(void)
 {
 	int local_error_count;
@@ -184,6 +186,7 @@ static int ipv6_test_spd_sad_lookup(void)
 	return local_error_count;
 }
 
+/* Checks direct AH IPv6 tunnel encapsulation and decapsulation without the SPD dispatcher. */
 static int ipv6_test_ah_roundtrip(void)
 {
 	int local_error_count;
@@ -208,6 +211,7 @@ static int ipv6_test_ah_roundtrip(void)
 	ipv6_test_init_tcp_packet(original, ipv6_test_inner_src, ipv6_test_inner_dst, 1234, 4321);
 	packet = buffer + IPV6_TEST_HEADROOM;
 	memcpy(packet, original, sizeof(original));
+	/* The direct roundtrip test isolates AH tunnel formatting from database lookup concerns. */
 	ipsec_sad_reset_replay(&sa);
 
 	ipsec_spd_set_ipv6(&spd, ipv6_test_inner_src, ipv6_test_mask_full, ipv6_test_inner_dst, ipv6_test_mask_full);
@@ -258,6 +262,7 @@ static int ipv6_test_ah_roundtrip(void)
 	return local_error_count;
 }
 
+/* Checks direct ESP IPv6 tunnel encapsulation and decapsulation without the dispatcher layer. */
 static int ipv6_test_esp_roundtrip(void)
 {
 	int local_error_count;
@@ -327,6 +332,7 @@ static int ipv6_test_esp_roundtrip(void)
 	return local_error_count;
 }
 
+/* Builds a full inbound database and confirms ipsec_input() accepts an IPv6 AH tunnel packet. */
 static int ipv6_test_input_ah(void)
 {
 	int local_error_count;
@@ -392,6 +398,7 @@ static int ipv6_test_input_ah(void)
 	}
 	ipsec_spd_add_sa(inbound_spd, inbound_sa);
 
+	/* Use the outbound helper only to synthesize a realistic protected packet for inbound validation. */
 	ret_val = ipsec_output_ipv6(packet, (int)(sizeof(buffer) - IPV6_TEST_HEADROOM), &enc_offset, &enc_len,
 						    ipv6_test_outer_src, ipv6_test_outer_dst, &outbound_spd);
 	if(ret_val != IPSEC_STATUS_SUCCESS)
@@ -426,6 +433,7 @@ static int ipv6_test_input_ah(void)
 	return local_error_count;
 }
 
+/* Builds a full inbound database and confirms ipsec_input() accepts an IPv6 ESP tunnel packet. */
 static int ipv6_test_input_esp(void)
 {
 	int local_error_count;
@@ -525,6 +533,7 @@ static int ipv6_test_input_esp(void)
 	return local_error_count;
 }
 
+/* Runs the IPv6 selector and tunnel-mode regressions through both direct and dispatcher paths. */
 void ipv6_test(test_result *global_results)
 {
 	test_result sub_results = {0, 0, 0, 0};

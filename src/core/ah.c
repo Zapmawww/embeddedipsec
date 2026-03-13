@@ -157,6 +157,12 @@ static int ipsec_ah_encapsulate_common(void *inner_packet, int *payload_offset, 
 	ipsec_ah_header *new_ah_header;
 	unsigned char digest[IPSEC_MAX_AUTHKEY_LEN];
 
+	/*
+	 * AH uses the same in-place packet image for both transport and tunnel mode.
+	 * Transport mode shifts only the original payload down to make room after the
+	 * existing IP header; tunnel mode writes a new outer IP header and AH header in
+	 * the caller-provided headroom before the original packet.
+	 */
 	outer_header_len = outer_family == IPSEC_AF_INET6 ? IPSEC_IPV6_HDR_SIZE : IPSEC_IPV4_HDR_SIZE;
 	inner_family = ipsec_packet_family(inner_packet);
 	inner_len = ipsec_packet_total_len(inner_packet);
@@ -182,6 +188,7 @@ static int ipsec_ah_encapsulate_common(void *inner_packet, int *payload_offset, 
 		return IPSEC_STATUS_NOT_IMPLEMENTED;
 		#else
 		transport_len = inner_len - ip_header_len;
+		/* Move the transport payload away from the IP header so AH can be inserted in place. */
 		memmove(((unsigned char *)inner_packet) + ip_header_len + IPSEC_AH_HDR_SIZE + IPSEC_AUTH_ICV,
 				((unsigned char *)inner_packet) + ip_header_len,
 				transport_len);
@@ -199,6 +206,7 @@ static int ipsec_ah_encapsulate_common(void *inner_packet, int *payload_offset, 
 						 0,
 						 0,
 						 0);
+		/* RFC 2402 requires mutable IP fields to be zeroed before the ICV is calculated. */
 		ipsec_packet_zero_mutable_fields(inner_packet);
 		#endif
 	}
@@ -208,6 +216,7 @@ static int ipsec_ah_encapsulate_common(void *inner_packet, int *payload_offset, 
 		return IPSEC_STATUS_NOT_IMPLEMENTED;
 		#else
 		new_ah_header = (ipsec_ah_header *)(((char *)inner_packet) - IPSEC_AUTH_ICV - IPSEC_AH_HDR_SIZE);
+		/* In tunnel mode the AH-protected payload is the full original IP packet. */
 		new_ah_header->nexthdr = inner_family == IPSEC_AF_INET6 ? IPSEC_PROTO_IPV6 : IPSEC_PROTO_IPIP;
 		new_ah_header->len = 0x04;
 		new_ah_header->reserved = 0x0000;
@@ -236,6 +245,7 @@ static int ipsec_ah_encapsulate_common(void *inner_packet, int *payload_offset, 
 	}
 
 	switch(sa->auth_alg) {
+		/* The digest is calculated over the final packet image with the ICV bytes cleared. */
 		case IPSEC_HMAC_MD5:
 			hmac_md5((unsigned char *)(sa->mode == IPSEC_TRANSPORT ? inner_packet : (((char *)inner_packet) - IPSEC_AH_HDR_SIZE - IPSEC_AUTH_ICV - outer_header_len)),
 				 (sa->mode == IPSEC_TRANSPORT ? inner_len + IPSEC_AH_HDR_SIZE + IPSEC_AUTH_ICV : inner_len + IPSEC_AH_HDR_SIZE + IPSEC_AUTH_ICV + outer_header_len),
@@ -280,6 +290,7 @@ static int ipsec_ah_encapsulate_common(void *inner_packet, int *payload_offset, 
 	}
 
 	*payload_size = inner_len + IPSEC_AH_HDR_SIZE + IPSEC_AUTH_ICV + outer_header_len;
+	/* Tunnel encapsulation returns a negative offset so the caller can send from the new outer header. */
 	*payload_offset = (((char *)inner_packet) - IPSEC_AH_HDR_SIZE - IPSEC_AUTH_ICV - outer_header_len) - ((char *)inner_packet);
 
 	ret_val = IPSEC_STATUS_SUCCESS;
@@ -348,8 +359,11 @@ int ipsec_ah_check(void *outer_packet, int *payload_offset, int *payload_size,
 	
 	ah_header = ((ipsec_ah_header *)((unsigned char *)outer_packet + ah_offs));
 
-	/* preliminary anti-replay check (without updating the SA sequence number window)          */
-	/* This check prevents useless ICV calculation if the Sequence Number is obviously wrong  */
+	/*
+	 * Replay protection is intentionally split into two phases: reject packets that
+	 * are obviously outside the window before doing the expensive ICV calculation,
+	 * then advance the window only after authentication has succeeded.
+	 */
 	ret_val = ipsec_check_replay_window(ipsec_ntohl(ah_header->sequence), sa->replay_last_seq, sa->replay_bitmap);
 	if(ret_val != IPSEC_AUDIT_SUCCESS)
 	{

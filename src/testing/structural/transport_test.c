@@ -75,11 +75,13 @@ static __u8 transport_test_esp_padding(int len, __u8 block_len)
 	return 0;
 }
 
+/* Keeps transport-mode tests explicit about replay reset at SA provisioning time. */
 static void transport_test_reset_replay(sad_entry *sa)
 {
 	ipsec_sad_reset_replay(sa);
 }
 
+/* Builds the smallest IPv4 TCP packet that still exercises transport-mode header rewriting. */
 static void transport_test_init_ipv4_tcp_packet(unsigned char *buffer, __u32 src, __u32 dst, __u16 src_port, __u16 dst_port)
 {
 	ipsec_ip_header *ip;
@@ -107,6 +109,7 @@ static void transport_test_init_ipv4_tcp_packet(unsigned char *buffer, __u32 src
 	tcp->wnd = ipsec_htons(1024);
 }
 
+/* Builds the IPv6 twin of the IPv4 transport test packet so both families cover the same logic. */
 static void transport_test_init_ipv6_tcp_packet(unsigned char *buffer, const __u8 *src, const __u8 *dst, __u16 src_port, __u16 dst_port)
 {
 	ipsec_ipv6_header *ip6;
@@ -193,6 +196,7 @@ static sad_entry transport_test_make_ipv6_esp_sa(void)
 	return sa;
 }
 
+/* Verifies an IPv4 AH transport roundtrip through the public output/input dispatcher pair. */
 static int transport_test_ipv4_ah(void)
 {
 	int local_error_count;
@@ -232,6 +236,7 @@ static int transport_test_ipv4_ah(void)
 	memcpy(packet, original, sizeof(original));
 	outbound_sa = transport_test_make_ipv4_ah_sa();
 	inbound_sa_template = transport_test_make_ipv4_ah_sa();
+	/* Provision distinct outbound and inbound SA instances so replay state stays per-SA. */
 	transport_test_reset_replay(&outbound_sa);
 	transport_test_reset_replay(&inbound_sa_template);
 	inbound_sa_template.sequence_number = 0;
@@ -256,6 +261,7 @@ static int transport_test_ipv4_ah(void)
 	}
 	ipsec_spd_add_sa(inbound_spd, inbound_sa);
 
+	/* Encapsulate first, then feed the protected packet back through ipsec_input(). */
 	ret_val = ipsec_output(packet, (int)(sizeof(buffer) - TRANSPORT_TEST_HEADROOM), &enc_offset, &enc_len,
 				      ipsec_inet_addr("192.168.1.10"), ipsec_inet_addr("192.168.1.20"), &outbound_spd);
 	if(ret_val != IPSEC_STATUS_SUCCESS)
@@ -295,6 +301,7 @@ static int transport_test_ipv4_ah(void)
 	return local_error_count;
 }
 
+/* Verifies IPv4 ESP transport mode including the deterministic trailer size for AES-CBC. */
 static int transport_test_ipv4_esp(void)
 {
 	int local_error_count;
@@ -333,6 +340,7 @@ static int transport_test_ipv4_esp(void)
 	transport_test_init_ipv4_tcp_packet(original, ipsec_inet_addr("192.168.1.10"), ipsec_inet_addr("192.168.1.20"), 2222, 3333);
 	packet = buffer + TRANSPORT_TEST_HEADROOM;
 	memcpy(packet, original, sizeof(original));
+	/* Mirror the padding calculation from the core so the expected protected length stays explicit. */
 	padding = transport_test_esp_padding((int)sizeof(ipsec_tcp_header) + 2, IPSEC_AES_CBC_BLOCK_SIZE);
 
 	outbound_sa = transport_test_make_ipv4_esp_sa();
@@ -400,6 +408,7 @@ static int transport_test_ipv4_esp(void)
 	return local_error_count;
 }
 
+/* Verifies AH transport processing for IPv6 using the same dispatcher path as lwIP would call. */
 static int transport_test_ipv6_ah(void)
 {
 	int local_error_count;
@@ -507,6 +516,7 @@ static int transport_test_ipv6_ah(void)
 	return local_error_count;
 }
 
+/* Verifies IPv6 ESP transport processing and the expected payload growth from ESP framing. */
 static int transport_test_ipv6_esp(void)
 {
 	int local_error_count;
@@ -617,6 +627,7 @@ static int transport_test_ipv6_esp(void)
 	return local_error_count;
 }
 
+/* Executes the transport-mode matrix for IPv4/IPv6 and AH/ESP when those features are enabled. */
 void transport_test(test_result *global_results)
 {
 	test_result sub_results = {0, 0, 0, 0};

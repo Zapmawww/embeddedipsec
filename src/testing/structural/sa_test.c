@@ -880,7 +880,10 @@ int test_sad_del(void)
 	return IPSEC_STATUS_NOT_IMPLEMENTED ;
 }
 
-
+/*
+ * Verifies that replay tracking is isolated per SA, survives table insertion, and
+ * can be reset explicitly when an inbound SA is reprovisioned.
+ */
 int test_sad_replay_state(void)
 {
 	int local_error_count = 0;
@@ -895,6 +898,7 @@ int test_sad_replay_state(void)
 	second.replay_win = IPSEC_SEQ_MAX_WINDOW;
 	copied_template.replay_win = IPSEC_SEQ_MAX_WINDOW;
 
+	/* Advance replay state on only one SA and make sure the second one remains untouched. */
 	if(ipsec_update_replay_window(1, &first.replay_last_seq, &first.replay_bitmap) != IPSEC_AUDIT_SUCCESS)
 	{
 		local_error_count++;
@@ -907,6 +911,7 @@ int test_sad_replay_state(void)
 		IPSEC_LOG_TST("test_sad_replay_state", "FAILURE", ("second SA inherited replay state from first SA"));
 	}
 
+	/* Table insertion must copy the replay window fields verbatim into persistent SAD storage. */
 	copied_template.replay_last_seq = 7;
 	copied_template.replay_bitmap = 0x55;
 	copied = ipsec_sad_add(&copied_template, &table);

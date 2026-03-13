@@ -246,6 +246,12 @@ db_set_netif	*ipsec_spd_load_dbs(spd_entry *inbound_spd_data, spd_entry *outboun
 			      (void *)inbound_spd_data, (void *)outbound_spd_data, (void *)inbound_sad_data, (void *)outbound_sad_data)
 				 );
 	
+	/*
+	 * Each db_set_netif owns one inbound/outbound SPD pair and one inbound/outbound
+	 * SAD pair for a single protected interface. The caller supplies the backing
+	 * arrays, and this function only wires them into the linked-list view used by
+	 * the lookup code.
+	 */
 	/* get free entry */
 	for(netif=0; netif < IPSEC_NR_NETIFS; netif++)
 	{
@@ -282,6 +288,11 @@ db_set_netif	*ipsec_spd_load_dbs(spd_entry *inbound_spd_data, spd_entry *outboun
 		if(db_sets[netif].outbound_sad.table[index].use_flag != IPSEC_USED)
 			db_sets[netif].outbound_sad.table[index].use_flag = IPSEC_FREE ;
 
+	/*
+	 * Preloaded static entries remain in array order. The linked-list pointers are
+	 * rebuilt here so later add/delete operations can work without relocating the
+	 * underlying storage.
+	 */
 	/* link the database entries together */
 
 	/* inbound spd data */
@@ -753,7 +764,11 @@ spd_entry *ipsec_spd_lookup(void *header, spd_table *table)
 	packet_protocol = ipsec_packet_protocol(header);
 	payload = ipsec_packet_payload_const(header);
 
-	/* compare and return when all fields match */
+	/*
+	 * SPD matching is intentionally first-match-wins in list order. Address family,
+	 * masked addresses, protocol, and then optional TCP/UDP ports are checked in the
+	 * same order that policies are typically reasoned about by the integrator.
+	 */
 	for(tmp_entry = table->first; tmp_entry != NULL; tmp_entry = tmp_entry->next)
 	{
 		if(ipsec_packet_family(header) != ipsec_spd_entry_family(tmp_entry))
@@ -978,6 +993,11 @@ sad_entry *ipsec_sad_add(sad_entry *entry, sad_table *table)
 		return NULL ;
 	}
 
+	/*
+	 * SAD entries are copied by value into the table so the caller can keep stack or
+	 * template objects. Replay state travels with the SA and therefore remains scoped
+	 * to each installed entry instead of being shared globally.
+	 */
 	/* copy the fields */
 	free_entry->dest = entry->dest ;
 	free_entry->dest_netaddr = entry->dest_netaddr ;
@@ -1034,6 +1054,7 @@ void ipsec_sad_reset_replay(sad_entry *entry)
 		return;
 	}
 
+	/* Call this when provisioning or rekeying an inbound SA to start a fresh replay window. */
 	entry->replay_last_seq = 0;
 	entry->replay_bitmap = 0;
 }

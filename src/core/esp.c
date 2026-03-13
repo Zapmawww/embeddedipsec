@@ -212,6 +212,12 @@ static ipsec_status ipsec_esp_encapsulate_common(void *packet, int *offset, int 
 	__u8 next_proto;
 	#endif
 
+	/*
+	 * The ESP path shares one in-place implementation for transport and tunnel mode.
+	 * Transport mode inserts ESP after the current IP header and encrypts only the
+	 * original transport payload plus trailer. Tunnel mode encrypts the full inner IP
+	 * packet and prepends a new outer IP header in the caller-provided headroom.
+	 */
 	outer_header_len = outer_family == IPSEC_AF_INET6 ? IPSEC_IPV6_HDR_SIZE : IPSEC_IPV4_HDR_SIZE;
 	inner_len = ipsec_packet_total_len(packet);
 	ip_header_len = ipsec_packet_header_len(packet);
@@ -235,6 +241,7 @@ static ipsec_status ipsec_esp_encapsulate_common(void *packet, int *offset, int 
 		return IPSEC_STATUS_NOT_IMPLEMENTED;
 		#else
 		transport_len = inner_len - ip_header_len;
+		/* ESP transport mode keeps the existing IP header and protects only the payload. */
 		padd_len = ipsec_esp_get_padding(transport_len + 2, block_len);
 		new_esp_header = (ipsec_esp_header *)(((unsigned char *)packet) + ip_header_len);
 		memmove(((unsigned char *)packet) + ip_header_len + IPSEC_ESP_HDR_SIZE + iv_len,
@@ -253,6 +260,7 @@ static ipsec_status ipsec_esp_encapsulate_common(void *packet, int *offset, int 
 
 		*pos++ = padd_len;
 		*pos = original_protocol;
+		/* The encrypted region is payload + padding + pad length + next header. */
 		payload_len = IPSEC_ESP_HDR_SIZE + iv_len + transport_len + padd_len + 2;
 
 		ret_val = ipsec_esp_encrypt_payload(sa->enc_alg,
@@ -306,6 +314,7 @@ static ipsec_status ipsec_esp_encapsulate_common(void *packet, int *offset, int 
 	new_esp_header = (ipsec_esp_header *)(((char *)packet) - iv_len - IPSEC_ESP_HDR_SIZE);
 	payload_offset = (((char *)packet) - (((char *)packet) - iv_len - IPSEC_ESP_HDR_SIZE - outer_header_len));
 
+	/* Tunnel mode encrypts the complete inner packet and records its protocol in the trailer. */
 	padd_len = ipsec_esp_get_padding(inner_len + 2, block_len);
 	pos = ((__u8 *)packet) + inner_len;
 	if(padd_len != 0)
@@ -460,8 +469,10 @@ ipsec_status ipsec_esp_decapsulate(void *packet, int *offset, int *len, sad_entr
 	if(sa->auth_alg != 0)
 	{
 
-		/* preliminary anti-replay check (without updating the SA sequence number window)          */
-		/* This check prevents useless ICV calculation if the Sequence Number is obviously wrong  */
+		/*
+		 * As with AH, replay handling is two-phase: cheap window rejection first,
+		 * authenticated state update only after the ICV has been verified.
+		 */
 		ret_val = ipsec_check_replay_window(ipsec_ntohl(esp_header->sequence), sa->replay_last_seq, sa->replay_bitmap);
 		if(ret_val != IPSEC_AUDIT_SUCCESS)
 		{
@@ -509,7 +520,10 @@ ipsec_status ipsec_esp_decapsulate(void *packet, int *offset, int *len, sad_entr
 	}
 
 
-	/* decapsulate the packet according the SA */
+	/*
+	 * After authentication, decrypt in place. The IV stays in front of the ciphertext,
+	 * so payload_offset points to SPI/SEQ/IV and the decrypted bytes start after the IV.
+	 */
 	memcpy(cbc_iv, ((char*)packet)+payload_offset, iv_len);
 	ret_val = ipsec_esp_decrypt_payload(sa->enc_alg,
 		(__u8 *)packet + payload_offset + iv_len,
@@ -531,6 +545,7 @@ ipsec_status ipsec_esp_decapsulate(void *packet, int *offset, int *len, sad_entr
 		transport_len = payload_len - iv_len;
 		pad_len = *(((unsigned char *)packet) + payload_offset + iv_len + transport_len - 2);
 		next_proto = *(((unsigned char *)packet) + payload_offset + iv_len + transport_len - 1);
+		/* Strip IV, padding, pad length, and next-header trailer to reconstruct the original payload. */
 		local_len = ip_header_len + transport_len - pad_len - 2;
 		memmove(((unsigned char *)packet) + ip_header_len,
 				((unsigned char *)packet) + payload_offset + iv_len,
@@ -555,6 +570,7 @@ ipsec_status ipsec_esp_decapsulate(void *packet, int *offset, int *len, sad_entr
 
 	*offset = payload_offset+iv_len ;
 
+	/* Tunnel mode leaves a complete inner IP packet starting after SPI/SEQ/IV. */
 	new_ip_packet = (void *)(((char*)packet) + payload_offset + iv_len) ;
 	local_len = ipsec_packet_total_len(new_ip_packet) ;
 

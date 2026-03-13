@@ -73,6 +73,7 @@ static const unsigned char aes_test_ciphertext[4 * IPSEC_AES_CBC_BLOCK_SIZE] =
 	0x12, 0x0e, 0xca, 0x30, 0x75, 0x86, 0xe1, 0xa7
 };
 
+/* Verifies that the wrapper encrypts exactly the published NIST CBC test vector. */
 static int aes_test_encrypt_vector(void)
 {
 	int local_error_count;
@@ -98,6 +99,7 @@ static int aes_test_encrypt_vector(void)
 	return local_error_count;
 }
 
+/* Verifies that decryption is the inverse of the same NIST CBC test vector. */
 static int aes_test_decrypt_vector(void)
 {
 	int local_error_count;
@@ -123,6 +125,7 @@ static int aes_test_decrypt_vector(void)
 	return local_error_count;
 }
 
+/* Ensures the wrapper rejects input lengths that are not aligned to the AES block size. */
 static int aes_test_rejects_bad_length(void)
 {
 	unsigned char buffer[IPSEC_AES_CBC_BLOCK_SIZE + 1];
@@ -139,6 +142,7 @@ static int aes_test_rejects_bad_length(void)
 	return 0;
 }
 
+/* Runs the AES wrapper regression set and folds the sub-results into the structural summary. */
 void aes_test(test_result *global_results)
 {
 	test_result sub_results = {

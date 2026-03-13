@@ -79,6 +79,12 @@ static int ipsec_mode_supported(__u8 mode)
 	}
 }
 
+/*
+ * The outward-facing IPv4 and IPv6 entry points both funnel through this helper.
+ * That keeps the hook contract uniform: SPD decides whether to bypass, discard,
+ * or apply a single SA, and the protocol-specific encapsulation code handles the
+ * actual AH/ESP and transport/tunnel packet layout changes.
+ */
 static int ipsec_output_common(unsigned char *packet, int packet_size, int *payload_offset, int *payload_size,
 						   spd_entry *spd, __u8 outer_family, const void *src, const void *dst)
 {
@@ -204,6 +210,10 @@ int ipsec_input(unsigned char *packet, int packet_size,
 	
 	spi = ipsec_sad_get_spi(packet) ;
 	ipsec_packet_get_addresses(packet, NULL, &dest_addr);
+	/*
+	 * Inbound processing must find the SA before the inner packet is available, so it
+	 * keys off the outer destination, protocol, and SPI from the protected packet.
+	 */
 	sa = ipsec_sad_lookup_addr(&dest_addr, ipsec_packet_protocol(packet), spi, &databases->inbound_sad) ;
 
 	if(sa == NULL)
@@ -256,6 +266,11 @@ int ipsec_input(unsigned char *packet, int packet_size,
 
 	inner_ip = (void *)(packet + *payload_offset) ;
 
+	/*
+	 * Successful cryptographic processing is not enough on its own. The recovered
+	 * inner packet must also match an inbound APPLY policy, and that policy must be
+	 * bound to the same SA that authenticated or decrypted the packet.
+	 */
 	spd = ipsec_spd_lookup(inner_ip, &databases->inbound_spd) ;
 	if(spd == NULL)
 	{

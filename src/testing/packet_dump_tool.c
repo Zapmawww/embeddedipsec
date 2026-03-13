@@ -143,6 +143,7 @@ static const __u8 packet_dump_ipv6_tunnel_dst[16] =
 	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02
 };
 
+/* Converts the stored address-family code into the label text written to the sidecar manifest. */
 static const char *packet_dump_family_name(__u8 family)
 {
 	return family == IPSEC_AF_INET6 ? "IPv6" : "IPv4";
@@ -184,6 +185,7 @@ static const char *packet_dump_auth_name(__u8 auth_alg)
 	}
 }
 
+	/* Builds a minimal IPv4 TCP packet so length growth comes only from IPsec processing. */
 static void packet_dump_init_ipv4_tcp_packet(unsigned char *buffer, __u32 src, __u32 dst, __u16 src_port, __u16 dst_port)
 {
 	ipsec_ip_header *ip;
@@ -211,6 +213,7 @@ static void packet_dump_init_ipv4_tcp_packet(unsigned char *buffer, __u32 src, _
 	tcp->wnd = ipsec_htons(1024);
 }
 
+/* Builds the IPv6 variant of the minimal TCP packet used as cleartext input to the tool. */
 static void packet_dump_init_ipv6_tcp_packet(unsigned char *buffer, const __u8 *src, const __u8 *dst, __u16 src_port, __u16 dst_port)
 {
 	ipsec_ipv6_header *ip6;
@@ -233,6 +236,7 @@ static void packet_dump_init_ipv6_tcp_packet(unsigned char *buffer, const __u8 *
 	tcp->wnd = ipsec_htons(1024);
 }
 
+/* Populates only the key material required by the selected ESP/AH algorithms for one SA. */
 static void packet_dump_fill_sa_keys(sad_entry *sa, __u8 enc_alg, __u8 auth_alg)
 {
 	if(enc_alg == IPSEC_AES_CBC)
@@ -301,6 +305,7 @@ static void packet_dump_configure_spd_ipv4(spd_entry *spd, __u32 src, __u32 dst,
 	spd->use_flag = IPSEC_USED;
 }
 
+/* Creates the IPv6 SPD selectors used by both generation and verification for one case. */
 static void packet_dump_configure_spd_ipv6(spd_entry *spd, const __u8 *src, const __u8 *dst, __u16 src_port, __u16 dst_port)
 {
 	memset(spd, 0, sizeof(*spd));
@@ -312,6 +317,7 @@ static void packet_dump_configure_spd_ipv6(spd_entry *spd, const __u8 *src, cons
 	spd->use_flag = IPSEC_USED;
 }
 
+/* Fully materializes one IPv4 test case: plaintext packet, outbound policy, and inbound SA template. */
 static void packet_dump_set_case_ipv4(packet_dump_case *test_case, const char *name, __u8 protocol, __u8 mode,
 					      __u8 enc_alg, __u8 auth_alg, __u32 spi,
 					      __u16 src_port, __u16 dst_port,
@@ -341,9 +347,11 @@ static void packet_dump_set_case_ipv4(packet_dump_case *test_case, const char *n
 	ipsec_spd_add_sa(&test_case->outbound_spd, &test_case->outbound_sa);
 	ipsec_sad_reset_replay(&test_case->outbound_sa);
 	ipsec_sad_reset_replay(&test_case->inbound_sa_template);
+	/* Verification starts from a fresh inbound SA, so the generated sequence number must be accepted once. */
 	test_case->inbound_sa_template.sequence_number = 0;
 }
 
+/* Fully materializes one IPv6 test case: plaintext packet, outbound policy, and inbound SA template. */
 static void packet_dump_set_case_ipv6(packet_dump_case *test_case, const char *name, __u8 protocol, __u8 mode,
 					      __u8 enc_alg, __u8 auth_alg, __u32 spi,
 					      __u16 src_port, __u16 dst_port,
@@ -376,6 +384,7 @@ static void packet_dump_set_case_ipv6(packet_dump_case *test_case, const char *n
 	test_case->inbound_sa_template.sequence_number = 0;
 }
 
+/* Prepares the human-readable manifest label that ties each PCAP frame to one scenario. */
 static void packet_dump_prepare_label(packet_dump_case *test_case, char *buffer, size_t buffer_size)
 {
 	_snprintf(buffer, buffer_size,
@@ -389,6 +398,7 @@ static void packet_dump_prepare_label(packet_dump_case *test_case, char *buffer,
 	test_case->label = buffer;
 }
 
+/* Builds the fixed capture matrix in deterministic order so generation and verification share one contract. */
 static void packet_dump_prepare_cases(packet_dump_case *cases, size_t *case_count)
 {
 	static char labels[PACKET_DUMP_CASE_COUNT][160];
@@ -501,6 +511,7 @@ static int packet_dump_write_record(FILE *stream, const unsigned char *packet, i
 	return fwrite(packet, (size_t)packet_len, 1, stream) == 1 ? 0 : 1;
 }
 
+/* Emits the sidecar manifest because classic PCAP has no portable packet-comment field. */
 static int packet_dump_write_labels(const char *pcap_path, packet_dump_case *cases, const int *packet_lengths, size_t case_count)
 {
 	FILE *stream;
@@ -538,6 +549,7 @@ static int packet_dump_write_labels(const char *pcap_path, packet_dump_case *cas
 	return 0;
 }
 
+/* Generates a PCAP by running each cleartext case through the public outbound IPsec API. */
 static int packet_dump_generate(const char *path)
 {
 	packet_dump_case cases[PACKET_DUMP_CASE_COUNT];
@@ -573,6 +585,7 @@ static int packet_dump_generate(const char *path)
 		test_case = &cases[index];
 		memset(packet_buffer, 0, sizeof(packet_buffer));
 		packet = packet_buffer + PACKET_DUMP_HEADROOM;
+		/* Each case starts from cleartext and records the exact protected packet bytes written by the core. */
 		memcpy(packet, test_case->original, (size_t)test_case->original_len);
 		payload_offset = 0;
 		payload_len = 0;
@@ -610,6 +623,7 @@ static int packet_dump_generate(const char *path)
 	return packet_dump_write_labels(path, cases, packet_lengths, case_count);
 }
 
+/* Creates the inbound SAD/SPD state that packet_dump_verify() expects to use for decapsulation. */
 static int packet_dump_prepare_verify_db(const packet_dump_case *cases, size_t case_count,
 						 spd_entry *inbound_spd_data, spd_entry *outbound_spd_data,
 						 sad_entry *inbound_sad_data, sad_entry *outbound_sad_data,
@@ -664,12 +678,14 @@ static int packet_dump_prepare_verify_db(const packet_dump_case *cases, size_t c
 			return 1;
 		}
 
+		/* Bind the recovered inner-flow selector to the exact SA template for this frame. */
 		ipsec_spd_add_sa(inbound_spd, inbound_sa);
 	}
 
 	return 0;
 }
 
+/* Verifies the capture by replaying every protected frame through ipsec_input() and comparing cleartext. */
 static int packet_dump_verify(const char *path)
 {
 	packet_dump_case cases[PACKET_DUMP_CASE_COUNT];
@@ -759,6 +775,7 @@ static int packet_dump_verify(const char *path)
 
 		if((payload_len != test_case->original_len) || (memcmp(packet_buffer + payload_offset, test_case->original, (size_t)test_case->original_len) != 0))
 		{
+			/* The tool treats any byte-level difference as a regression, not just protocol-level success. */
 			fprintf(stderr, "roundtrip mismatch for %s\n", test_case->label);
 			ipsec_spd_release_dbs(databases);
 			fclose(stream);
@@ -781,6 +798,7 @@ static int packet_dump_verify(const char *path)
 	return 0;
 }
 
+/* CLI front-end used by CTest and by manual Wireshark capture generation. */
 int main(int argc, char **argv)
 {
 	const char *mode;

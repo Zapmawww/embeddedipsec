@@ -45,6 +45,12 @@ static ipsec_lwip_action ipsec_lwip_copy_outcome(struct pbuf *original, struct p
 	return IPSEC_LWIP_ACTION_BYPASS;
 }
 
+/*
+ * The core IPsec code still expects one mutable, contiguous packet image with spare
+ * headroom for tunnel headers and spare tailroom for ESP padding and ICV data.
+ * The lwIP shim therefore flattens the incoming pbuf chain into a work buffer
+ * before calling the core transform functions.
+ */
 static int ipsec_lwip_copy_to_buffer(struct pbuf *p, unsigned char *buffer, int headroom, unsigned char **packet)
 {
 	if((p == NULL) || (buffer == NULL) || (packet == NULL))
@@ -66,6 +72,11 @@ static int ipsec_lwip_copy_to_buffer(struct pbuf *p, unsigned char *buffer, int 
 	return p->tot_len;
 }
 
+/*
+ * Core transforms return an offset/length pair inside the caller-owned buffer.
+ * The adapter converts that result back into a fresh pbuf so the surrounding
+ * lwIP path can continue using normal pbuf ownership rules.
+ */
 static struct pbuf *ipsec_lwip_alloc_packet(const void *data, u16_t len)
 {
 	struct pbuf *packet;
@@ -85,6 +96,12 @@ static struct pbuf *ipsec_lwip_alloc_packet(const void *data, u16_t len)
 	return packet;
 }
 
+/*
+ * Outbound processing is identical for AH/ESP and transport/tunnel mode at the
+ * hook level: resolve one outbound SPD entry, interpret the policy, then hand
+ * the packet to the requested core transform. The mode-specific packet surgery
+ * stays inside ipsec_output()/ipsec_output_ipv6().
+ */
 static ipsec_lwip_action ipsec_lwip_transform_output(unsigned char *packet, int packet_len,
 									 ipsec_lwip_adapter *adapter,
 									 int (*transform)(unsigned char *, int, int *, int *, void const *, void const *, void *),
@@ -92,6 +109,11 @@ static ipsec_lwip_action ipsec_lwip_transform_output(unsigned char *packet, int 
 									 struct pbuf **result)
 {
 	int payload_offset;
+	/*
+	 * lwIP has already selected the egress netif, so the per-netif outbound SPD is
+	 * the only policy database consulted here. A missing SPD entry is treated as an
+	 * integration error rather than an implicit bypass.
+	 */
 	int payload_size;
 	spd_entry *spd;
 	struct pbuf *output;
@@ -197,6 +219,11 @@ ipsec_lwip_action ipsec_lwip_input(struct pbuf *p, struct netif *inp,
 		return IPSEC_LWIP_ACTION_ERROR;
 	}
 
+	/*
+	 * The inbound hook sees both protected AH/ESP traffic and ordinary plaintext IP
+	 * traffic. Plaintext traffic still runs through the inbound SPD so a configured
+	 * APPLY policy can reject packets that should have arrived protected.
+	 */
 	if((ipsec_packet_protocol(packet) != IPSEC_PROTO_AH) && (ipsec_packet_protocol(packet) != IPSEC_PROTO_ESP))
 	{
 		spd = ipsec_spd_lookup(packet, &adapter->databases->inbound_spd);
@@ -221,6 +248,11 @@ ipsec_lwip_action ipsec_lwip_input(struct pbuf *p, struct netif *inp,
 		return IPSEC_LWIP_ACTION_DISCARD;
 	}
 
+	/*
+	 * ipsec_input() rewrites the working buffer in place and reports where the inner
+	 * packet now starts. That offset can be zero for transport mode or point into the
+	 * middle of the buffer for tunnel decapsulation.
+	 */
 	payload_offset = 0;
 	payload_size = 0;
 	status = ipsec_input(packet, packet_len, &payload_offset, &payload_size, adapter->databases);
@@ -298,6 +330,11 @@ ipsec_lwip_action ipsec_lwip_output_ipv4(struct pbuf *p, const ip4_addr_t *src,
 
 	src_addr = ip4_addr_get_u32(src);
 	dst_addr = ip4_addr_get_u32(dst);
+	/*
+	 * The IPv4 and IPv6 wrappers only adapt lwIP address types. The actual policy
+	 * and encapsulation path stays shared so AH/ESP and tunnel/transport mode use
+	 * the same hook contract.
+	 */
 	return ipsec_lwip_transform_output(packet, packet_len, adapter, ipsec_lwip_call_output_ipv4,
 					   &src_addr, &dst_addr, result);
 }
