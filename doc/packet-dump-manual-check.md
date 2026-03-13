@@ -139,6 +139,27 @@ Optional ESP decryption in Wireshark
 
 If you want Wireshark to decode the inner ESP payload, add the corresponding SAs in Wireshark's ESP preferences.
 
+Open `Edit -> Preferences -> Protocols -> ESP` and enable ESP payload decryption. Wireshark matches ESP packets by outer IP version, outer source address, outer destination address, and SPI. You do not enter transport vs tunnel mode in the SA table.
+
+Use the following SA entries for the ESP frames in this capture:
+
+| Frame | Label | Protocol | Source address | Destination address | SPI | Encryption | Encryption key | Authentication | Authentication key |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 5 | `ipv4-esp-transport-aes` | IPv4 | `192.168.2.10` | `192.168.2.20` | `0x00006201` | `AES-CBC` | `0x2b7e151628aed2a6abf7158809cf4f3c` | `NULL` | leave empty |
+| 6 | `ipv4-esp-transport-aes-sha1` | IPv4 | `192.168.3.10` | `192.168.3.20` | `0x00006202` | `AES-CBC` | `0x2b7e151628aed2a6abf7158809cf4f3c` | `HMAC-SHA1-96` | `0x0123456701234567012345670123456789abcdef` |
+| 7 | `ipv4-esp-tunnel-3des` | IPv4 | `192.168.30.1` | `192.168.40.1` | `0x00006203` | `TripleDES-CBC` | `0x012345670123456701234567012345670123456701234567` | `NULL` | leave empty |
+| 8 | `ipv6-esp-transport-aes-sha1` | IPv6 | `2001:db8:11::10` | `2001:db8:22::20` | `0x00006204` | `AES-CBC` | `0x2b7e151628aed2a6abf7158809cf4f3c` | `HMAC-SHA1-96` | `0x0123456701234567012345670123456789abcdef` |
+| 9 | `ipv6-esp-tunnel-3des` | IPv6 | `2001:db8:aa::1` | `2001:db8:bb::2` | `0x00006205` | `TripleDES-CBC` | `0x012345670123456701234567012345670123456701234567` | `NULL` | leave empty |
+| 10 | `ipv6-esp-tunnel-aes-sha1` | IPv6 | `2001:db8:aa::1` | `2001:db8:bb::2` | `0x00006206` | `AES-CBC` | `0x2b7e151628aed2a6abf7158809cf4f3c` | `HMAC-SHA1-96` | `0x0123456701234567012345670123456789abcdef` |
+
+Notes for filling the Wireshark SA table:
+
+- Use the outer source and destination addresses from the ESP packet, not the inner protected addresses.
+- For the `NULL` authentication rows, leave the authentication key empty.
+- Wireshark may display `TripleDES-CBC` as `3DES-CBC` depending on version. Use the 3DES CBC entry.
+- If you only want payload decryption and not integrity verification, Wireshark still needs the authentication algorithm to match the packet layout for authenticated ESP cases.
+- AH frames are not covered by this table. This Wireshark configuration is only for ESP packet decryption and optional ESP authentication checking.
+
 Encryption and authentication material used by the tool
 
 - AES-CBC key: `2b7e151628aed2a6abf7158809cf4f3c`
