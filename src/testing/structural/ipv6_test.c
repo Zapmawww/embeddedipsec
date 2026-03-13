@@ -41,11 +41,6 @@
 #define IPV6_TEST_PACKET_SIZE (IPSEC_IPV6_HDR_SIZE + sizeof(ipsec_tcp_header))
 #define IPV6_TEST_HEADROOM    (128)
 
-extern __u32 ipsec_ah_bitmap;
-extern __u32 ipsec_ah_lastSeq;
-extern __u32 ipsec_esp_bitmap;
-extern __u32 ipsec_esp_lastSeq;
-
 static const __u8 ipv6_test_mask_full[16] =
 {
 	0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
@@ -213,8 +208,7 @@ static int ipv6_test_ah_roundtrip(void)
 	ipv6_test_init_tcp_packet(original, ipv6_test_inner_src, ipv6_test_inner_dst, 1234, 4321);
 	packet = buffer + IPV6_TEST_HEADROOM;
 	memcpy(packet, original, sizeof(original));
-	ipsec_ah_bitmap = 0;
-	ipsec_ah_lastSeq = 0;
+	ipsec_sad_reset_replay(&sa);
 
 	ipsec_spd_set_ipv6(&spd, ipv6_test_inner_src, ipv6_test_mask_full, ipv6_test_inner_dst, ipv6_test_mask_full);
 	ipsec_spd_add_sa(&spd, &sa);
@@ -261,9 +255,6 @@ static int ipv6_test_ah_roundtrip(void)
 		IPSEC_LOG_TST("ipv6_test_ah_roundtrip", "FAILURE", ("AH IPv6 roundtrip did not preserve the inner packet"));
 	}
 
-	ipsec_ah_bitmap = 0;
-	ipsec_ah_lastSeq = 0;
-
 	return local_error_count;
 }
 
@@ -290,8 +281,7 @@ static int ipv6_test_esp_roundtrip(void)
 	ipv6_test_init_tcp_packet(original, ipv6_test_inner_src, ipv6_test_inner_dst, 2222, 3333);
 	packet = buffer + IPV6_TEST_HEADROOM;
 	memcpy(packet, original, sizeof(original));
-	ipsec_esp_bitmap = 0;
-	ipsec_esp_lastSeq = 0;
+	ipsec_sad_reset_replay(&sa);
 
 	ret_val = ipsec_esp_encapsulate_ipv6(packet, &enc_offset, &enc_len, &sa, ipv6_test_outer_src, ipv6_test_outer_dst);
 	if(ret_val != IPSEC_STATUS_SUCCESS)
@@ -333,9 +323,6 @@ static int ipv6_test_esp_roundtrip(void)
 		local_error_count++;
 		IPSEC_LOG_TST("ipv6_test_esp_roundtrip", "FAILURE", ("ESP IPv6 roundtrip did not preserve the inner packet"));
 	}
-
-	ipsec_esp_bitmap = 0;
-	ipsec_esp_lastSeq = 0;
 
 	return local_error_count;
 }
@@ -379,10 +366,10 @@ static int ipv6_test_input_ah(void)
 	packet = buffer + IPV6_TEST_HEADROOM;
 	memcpy(packet, original, sizeof(original));
 
-	ipsec_ah_bitmap = 0;
-	ipsec_ah_lastSeq = 0;
 	outbound_sa = ipv6_test_make_ah_sa();
 	inbound_sa_template = ipv6_test_make_ah_sa();
+	ipsec_sad_reset_replay(&outbound_sa);
+	ipsec_sad_reset_replay(&inbound_sa_template);
 	inbound_sa_template.sequence_number = 0;
 	ipsec_spd_set_ipv6(&outbound_spd, ipv6_test_inner_src, ipv6_test_mask_full, ipv6_test_inner_dst, ipv6_test_mask_full);
 	ipsec_spd_add_sa(&outbound_spd, &outbound_sa);
@@ -436,8 +423,6 @@ static int ipv6_test_input_ah(void)
 	}
 
 	ipsec_spd_release_dbs(databases);
-	ipsec_ah_bitmap = 0;
-	ipsec_ah_lastSeq = 0;
 	return local_error_count;
 }
 
@@ -480,10 +465,10 @@ static int ipv6_test_input_esp(void)
 	packet = buffer + IPV6_TEST_HEADROOM;
 	memcpy(packet, original, sizeof(original));
 
-	ipsec_esp_bitmap = 0;
-	ipsec_esp_lastSeq = 0;
 	outbound_sa = ipv6_test_make_esp_sa();
 	inbound_sa_template = ipv6_test_make_esp_sa();
+	ipsec_sad_reset_replay(&outbound_sa);
+	ipsec_sad_reset_replay(&inbound_sa_template);
 	inbound_sa_template.sequence_number = 0;
 	ipsec_spd_set_ipv6(&outbound_spd, ipv6_test_inner_src, ipv6_test_mask_full, ipv6_test_inner_dst, ipv6_test_mask_full);
 	ipsec_spd_add_sa(&outbound_spd, &outbound_sa);
@@ -537,8 +522,6 @@ static int ipv6_test_input_esp(void)
 	}
 
 	ipsec_spd_release_dbs(databases);
-	ipsec_esp_bitmap = 0;
-	ipsec_esp_lastSeq = 0;
 	return local_error_count;
 }
 

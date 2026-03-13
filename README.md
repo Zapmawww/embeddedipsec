@@ -17,6 +17,12 @@ ESP encryption backends
  - The current AES-CBC implementation is backed by the vendored `tiny-aes` sources and is compiled with CBC enabled and ECB/CTR disabled.
  - The wrapper isolates the AES backend so it can be replaced later with an ASIC or hardware-accelerated implementation without changing the ESP packet logic.
 
+Modern lwIP porting
+
+ - `src/include/netif/ipsec_lwip_adapter.h` and `src/netif/ipsec_lwip_adapter.c` provide a direct-hook lwIP adapter skeleton based on a fixed-size work buffer.
+ - `doc/lwip-porting.md` documents the intended hook points in lwIP 2.1.x and the multiple-netif integration model.
+ - The legacy fake-netif adapter in `src/netif/ipsecdev.c` remains for reference, but it is not the recommended path for a modern lwIP port.
+
 Copyright (c) 2003-2004 Niklaus Schild and Christian Scheurer, HTI Biel/Bienne
 All rights reserved.
 

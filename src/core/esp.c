@@ -73,13 +73,6 @@
 #include "ipsec/esp.h"
 
 
-__u32 ipsec_esp_bitmap 	= 0;        		/**< save session state to detect replays - must be 32 bits. 
-											 *   Note: must be initialized with zero (0x00000000) when
-											 *         a new SA is established! */
-__u32 ipsec_esp_lastSeq	= 0;         		/**< save session state to detect replays
-											 *   Note: must be initialized with zero (0x00000000) when
-											 *         a new SA is established! */
-
 static __u8 ipsec_esp_get_padding(int len, __u8 block_len);
 
 static void ipsec_esp_finalize_packet(void *packet, int total_len, __u8 protocol)
@@ -466,12 +459,12 @@ ipsec_status ipsec_esp_decapsulate(void *packet, int *offset, int *len, sad_entr
 	if(sa->auth_alg != 0)
 	{
 
-		/* preliminary anti-replay check (without updating the global sequence number window)     */
+		/* preliminary anti-replay check (without updating the SA sequence number window)          */
 		/* This check prevents useless ICV calculation if the Sequence Number is obviously wrong  */
-		ret_val = ipsec_check_replay_window(ipsec_ntohl(esp_header->sequence), ipsec_esp_lastSeq, ipsec_esp_bitmap);
+		ret_val = ipsec_check_replay_window(ipsec_ntohl(esp_header->sequence), sa->replay_last_seq, sa->replay_bitmap);
 		if(ret_val != IPSEC_AUDIT_SUCCESS)
 		{
-			IPSEC_LOG_AUD("ipsec_esp_decapsulate", IPSEC_AUDIT_SEQ_MISMATCH, ("packet rejected by anti-replay check (lastSeq=%08lx, seq=%08lx, window size=%d)", ipsec_esp_lastSeq, ipsec_ntohl(esp_header->sequence), IPSEC_SEQ_MAX_WINDOW) );
+			IPSEC_LOG_AUD("ipsec_esp_decapsulate", IPSEC_AUDIT_SEQ_MISMATCH, ("packet rejected by anti-replay check (lastSeq=%08lx, seq=%08lx, window size=%d)", sa->replay_last_seq, ipsec_ntohl(esp_header->sequence), IPSEC_SEQ_MAX_WINDOW) );
 			return ret_val;
 		}
 
@@ -504,11 +497,11 @@ ipsec_status ipsec_esp_decapsulate(void *packet, int *offset, int *len, sad_entr
 		/* reduce payload by ICV */
 		payload_len -= IPSEC_AUTH_ICV ;
 
-		/* post-ICV calculationn anti-replay check (this call will update the global sequence number window) */
-		ret_val = ipsec_update_replay_window(ipsec_ntohl(esp_header->sequence), (__u32 *)&ipsec_esp_lastSeq, (__u32 *)&ipsec_esp_bitmap);
+		/* post-ICV calculation anti-replay check (this call will update the SA sequence number window) */
+		ret_val = ipsec_update_replay_window(ipsec_ntohl(esp_header->sequence), &sa->replay_last_seq, &sa->replay_bitmap);
 		if(ret_val != IPSEC_AUDIT_SUCCESS)
 		{
-			IPSEC_LOG_AUD("ipsec_esp_decapsulate", IPSEC_AUDIT_SEQ_MISMATCH, ("packet rejected by anti-replay update (lastSeq=%08lx, seq=%08lx, window size=%d)", ipsec_esp_lastSeq, ipsec_ntohl(esp_header->sequence), IPSEC_SEQ_MAX_WINDOW) );
+			IPSEC_LOG_AUD("ipsec_esp_decapsulate", IPSEC_AUDIT_SEQ_MISMATCH, ("packet rejected by anti-replay update (lastSeq=%08lx, seq=%08lx, window size=%d)", sa->replay_last_seq, ipsec_ntohl(esp_header->sequence), IPSEC_SEQ_MAX_WINDOW) );
 			return ret_val;
 		}
 

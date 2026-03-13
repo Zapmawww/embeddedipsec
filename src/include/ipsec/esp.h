@@ -68,10 +68,6 @@ typedef struct esp_packet_struct
 	__u8	data[1] ;				/**< start of data, usually start of the IV */
 } esp_packet ;
 
-
-extern __u32 ipsec_esp_bitmap; 	
-extern __u32 ipsec_esp_lastSeq;
-
 ipsec_status ipsec_esp_decapsulate(void *packet, int *offset, int *len, sad_entry *sa) ;
 ipsec_status ipsec_esp_encapsulate(ipsec_ip_header *packet, int *offset, int *len, sad_entry *sa, __u32 src_addr, __u32 dest_addr) ;
 ipsec_status ipsec_esp_encapsulate_ipv6(void *packet, int *offset, int *len, sad_entry *sa, const __u8 *src_addr, const __u8 *dest_addr) ;

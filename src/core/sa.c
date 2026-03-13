@@ -985,6 +985,8 @@ sad_entry *ipsec_sad_add(sad_entry *entry, sad_table *table)
 	free_entry->mode = entry->mode ;
 	free_entry->sequence_number = entry->sequence_number ;
 	free_entry->replay_win = entry->replay_win ;
+	free_entry->replay_last_seq = entry->replay_last_seq ;
+	free_entry->replay_bitmap = entry->replay_bitmap ;
 	free_entry->lifetime = entry->lifetime ;
 	free_entry->path_mtu = entry->path_mtu ;
 	free_entry->enc_alg = entry->enc_alg ;
@@ -1022,6 +1024,17 @@ sad_entry *ipsec_sad_add(sad_entry *entry, sad_table *table)
 
 	IPSEC_LOG_TRC(IPSEC_TRACE_RETURN, "ipsec_sad_add", ("free_entry = %p", (void *) free_entry) );
 	return free_entry ;
+}
+
+void ipsec_sad_reset_replay(sad_entry *entry)
+{
+	if(entry == NULL)
+	{
+		return;
+	}
+
+	entry->replay_last_seq = 0;
+	entry->replay_bitmap = 0;
 }
 
 void ipsec_sad_set_ipv6(sad_entry *entry, const __u8 *dest, const __u8 *dest_net)
@@ -1345,9 +1358,9 @@ ipsec_status ipsec_spd_flush(spd_table *table, spd_entry *def_entry)
  */
 ipsec_status ipsec_sad_flush(sad_table *table)
 {
-	memset(table->table, 0, sizeof(spd_entry)*IPSEC_MAX_SAD_ENTRIES) ;
+	memset(table->table, 0, sizeof(sad_entry)*IPSEC_MAX_SAD_ENTRIES) ;
 	table->first = NULL ;
-	table->first = NULL ;
+	table->last = NULL ;
 	
 	return IPSEC_STATUS_SUCCESS ;
 }

@@ -85,6 +85,8 @@ struct sa_entry_struct
 	/* this fields are used to maintain the current connection */
 	__u32		sequence_number ;	/**< the sequence number used to implement the anti-reply mechanism (RFC 2402, 3.3.2: initialize with 0) */
 	__u8		replay_win ;		/**< reply windows size */
+	__u32		replay_last_seq ;/**< last accepted inbound sequence number for this SA */
+	__u32		replay_bitmap ;	/**< inbound anti-replay bitmap for this SA */
 	__u32		lifetime ;			/**< lifetime of the SA (must be dropped if lifetime runs out) */
 	__u16		path_mtu ;			/**< mean transmission unit */
 	/* this fields are used for the cryptography */
@@ -170,23 +172,14 @@ typedef struct db_set_netif_struct
 			IPSEC_HTONL(spi), \
 			proto, \
 			mode, \
-			0, 0, 0, 1450, \
+			0, 0, 0, 0, 0, 1450, \
 			enc_alg, \
 			{ek1, ek2, ek3, ek4, ek5, ek6, ek7, ek8, ek9, ek10, ek11, ek12, ek13, ek14, ek15, ek16, ek17, ek18, ek19, ek20, ek21, ek22, ek23, ek24}, \
 			auth_alg, \
 			{ak1, ak2, ak3, ak4, ak5, ak6, ak7, ak8, ak9, ak10, ak11, ak12, ak13, ak14, ak15, ak16, ak17, ak18, ak19, ak20}, \
 			0,0, IPSEC_USED 	/**< helps to statically configure the SAD entries */
 
-#define EMPTY_SAD_ENTRY { 0, 0, 0, 0, 0, 0, \
-						  0, 0, 0, 0, 0, 0, \
-						  0, 0, 0, 0, 0, 0, \
-						  0, 0, 0, 0, 0, 0, \
-						  0, 0, 0, 0, 0, 0, \
-						  0, 0, 0, 0, 0, 0, \
-						  0, 0, 0, 0, 0, 0, \
-						  0, 0, 0, 0, 0, 0, \
-						  0, 0, 0, 0, 0, 0, \
-						  IPSEC_FREE } /**< empty, unconfigured SAD entry    */
+#define EMPTY_SAD_ENTRY { 0 } /**< empty, unconfigured SAD entry    */
 
 #define EMPTY_SPD_ENTRY { 0, 0, 0, 0, 0, 0, \
 					  	  0, IPSEC_FREE } /**< empty, unconfigured SPD entry */
@@ -223,6 +216,8 @@ void ipsec_spd_print(spd_table *table) ;
 sad_entry *ipsec_sad_get_free(sad_table *table) ;
 
 sad_entry *ipsec_sad_add(sad_entry *entry, sad_table *table) ;
+
+void ipsec_sad_reset_replay(sad_entry *entry) ;
 
 void ipsec_sad_set_ipv6(sad_entry *entry, const __u8 *dest, const __u8 *dest_net) ;
 

@@ -880,6 +880,52 @@ int test_sad_del(void)
 }
 
 
+int test_sad_replay_state(void)
+{
+	int local_error_count = 0;
+	sad_entry first = { EMPTY_SAD_ENTRY };
+	sad_entry second = { EMPTY_SAD_ENTRY };
+	sad_entry copied_template = { EMPTY_SAD_ENTRY };
+	sad_entry storage[IPSEC_MAX_SAD_ENTRIES] = { EMPTY_SAD_ENTRY };
+	sad_table table = { storage, NULL, NULL };
+	sad_entry *copied;
+
+	first.replay_win = IPSEC_SEQ_MAX_WINDOW;
+	second.replay_win = IPSEC_SEQ_MAX_WINDOW;
+	copied_template.replay_win = IPSEC_SEQ_MAX_WINDOW;
+
+	if(ipsec_update_replay_window(1, &first.replay_last_seq, &first.replay_bitmap) != IPSEC_AUDIT_SUCCESS)
+	{
+		local_error_count++;
+		IPSEC_LOG_TST("test_sad_replay_state", "FAILURE", ("unable to update replay state on first SA"));
+	}
+
+	if(ipsec_check_replay_window(1, second.replay_last_seq, second.replay_bitmap) != IPSEC_AUDIT_SUCCESS)
+	{
+		local_error_count++;
+		IPSEC_LOG_TST("test_sad_replay_state", "FAILURE", ("second SA inherited replay state from first SA"));
+	}
+
+	copied_template.replay_last_seq = 7;
+	copied_template.replay_bitmap = 0x55;
+	copied = ipsec_sad_add(&copied_template, &table);
+	if((copied == NULL) || (copied->replay_last_seq != 7) || (copied->replay_bitmap != 0x55))
+	{
+		local_error_count++;
+		IPSEC_LOG_TST("test_sad_replay_state", "FAILURE", ("ipsec_sad_add() did not preserve per-SA replay state"));
+	}
+
+	ipsec_sad_reset_replay(&first);
+	if((first.replay_last_seq != 0) || (first.replay_bitmap != 0))
+	{
+		local_error_count++;
+		IPSEC_LOG_TST("test_sad_replay_state", "FAILURE", ("ipsec_sad_reset_replay() did not clear replay state"));
+	}
+
+	return local_error_count;
+}
+
+
 /**
  * Main test function for the SA tests.
  * It does nothing but calling the subtests one after the other.
@@ -887,8 +933,8 @@ int test_sad_del(void)
 void sa_test(test_result *global_results)
 {
 	test_result 	sub_results	= {
-						 47, 			
-						 10,			
+					 51, 			
+					 11,			
 						  0, 			
 						  0, 		
 					};
@@ -924,6 +970,9 @@ void sa_test(test_result *global_results)
 
 	retcode = test_sad_flush() ;
 	IPSEC_TESTING_EVALUATE(retcode, sub_results, "sa_test_sad_flush()", (" "));
+
+	retcode = test_sad_replay_state() ;
+	IPSEC_TESTING_EVALUATE(retcode, sub_results, "sa_test_sad_replay_state()", (" "));
 
 	global_results->tests += sub_results.tests;
 	global_results->functions += sub_results.functions;

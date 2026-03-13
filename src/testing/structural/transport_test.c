@@ -42,11 +42,6 @@
 #define TRANSPORT_TEST_IPV4_PACKET_SIZE (IPSEC_IPV4_HDR_SIZE + sizeof(ipsec_tcp_header))
 #define TRANSPORT_TEST_IPV6_PACKET_SIZE (IPSEC_IPV6_HDR_SIZE + sizeof(ipsec_tcp_header))
 
-extern __u32 ipsec_ah_bitmap;
-extern __u32 ipsec_ah_lastSeq;
-extern __u32 ipsec_esp_bitmap;
-extern __u32 ipsec_esp_lastSeq;
-
 static const __u8 transport_test_mask_full[16] =
 {
 	0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
@@ -80,16 +75,9 @@ static __u8 transport_test_esp_padding(int len, __u8 block_len)
 	return 0;
 }
 
-static void transport_test_reset_ah_replay(void)
+static void transport_test_reset_replay(sad_entry *sa)
 {
-	ipsec_ah_bitmap = 0;
-	ipsec_ah_lastSeq = 0;
-}
-
-static void transport_test_reset_esp_replay(void)
-{
-	ipsec_esp_bitmap = 0;
-	ipsec_esp_lastSeq = 0;
+	ipsec_sad_reset_replay(sa);
 }
 
 static void transport_test_init_ipv4_tcp_packet(unsigned char *buffer, __u32 src, __u32 dst, __u16 src_port, __u16 dst_port)
@@ -242,10 +230,10 @@ static int transport_test_ipv4_ah(void)
 	transport_test_init_ipv4_tcp_packet(original, ipsec_inet_addr("192.168.1.10"), ipsec_inet_addr("192.168.1.20"), 1234, 4321);
 	packet = buffer + TRANSPORT_TEST_HEADROOM;
 	memcpy(packet, original, sizeof(original));
-	transport_test_reset_ah_replay();
-
 	outbound_sa = transport_test_make_ipv4_ah_sa();
 	inbound_sa_template = transport_test_make_ipv4_ah_sa();
+	transport_test_reset_replay(&outbound_sa);
+	transport_test_reset_replay(&inbound_sa_template);
 	inbound_sa_template.sequence_number = 0;
 	outbound_spd = (spd_entry){ SPD_ENTRY(192,168,1,10, 255,255,255,255, 192,168,1,20, 255,255,255,255, IPSEC_PROTO_TCP, 1234, 4321, POLICY_APPLY, 0) };
 	ipsec_spd_add_sa(&outbound_spd, &outbound_sa);
@@ -304,7 +292,6 @@ static int transport_test_ipv4_ah(void)
 	}
 
 	ipsec_spd_release_dbs(databases);
-	transport_test_reset_ah_replay();
 	return local_error_count;
 }
 
@@ -346,11 +333,12 @@ static int transport_test_ipv4_esp(void)
 	transport_test_init_ipv4_tcp_packet(original, ipsec_inet_addr("192.168.1.10"), ipsec_inet_addr("192.168.1.20"), 2222, 3333);
 	packet = buffer + TRANSPORT_TEST_HEADROOM;
 	memcpy(packet, original, sizeof(original));
-	transport_test_reset_esp_replay();
 	padding = transport_test_esp_padding((int)sizeof(ipsec_tcp_header) + 2, IPSEC_AES_CBC_BLOCK_SIZE);
 
 	outbound_sa = transport_test_make_ipv4_esp_sa();
 	inbound_sa_template = transport_test_make_ipv4_esp_sa();
+	transport_test_reset_replay(&outbound_sa);
+	transport_test_reset_replay(&inbound_sa_template);
 	inbound_sa_template.sequence_number = 0;
 	outbound_spd = (spd_entry){ SPD_ENTRY(192,168,1,10, 255,255,255,255, 192,168,1,20, 255,255,255,255, IPSEC_PROTO_TCP, 2222, 3333, POLICY_APPLY, 0) };
 	ipsec_spd_add_sa(&outbound_spd, &outbound_sa);
@@ -409,7 +397,6 @@ static int transport_test_ipv4_esp(void)
 	}
 
 	ipsec_spd_release_dbs(databases);
-	transport_test_reset_esp_replay();
 	return local_error_count;
 }
 
@@ -450,10 +437,10 @@ static int transport_test_ipv6_ah(void)
 	transport_test_init_ipv6_tcp_packet(original, transport_test_ipv6_src, transport_test_ipv6_dst, 1234, 4321);
 	packet = buffer + TRANSPORT_TEST_HEADROOM;
 	memcpy(packet, original, sizeof(original));
-	transport_test_reset_ah_replay();
-
 	outbound_sa = transport_test_make_ipv6_ah_sa();
 	inbound_sa_template = transport_test_make_ipv6_ah_sa();
+	transport_test_reset_replay(&outbound_sa);
+	transport_test_reset_replay(&inbound_sa_template);
 	inbound_sa_template.sequence_number = 0;
 	ipsec_spd_set_ipv6(&outbound_spd, transport_test_ipv6_src, transport_test_mask_full, transport_test_ipv6_dst, transport_test_mask_full);
 	outbound_spd.protocol = IPSEC_PROTO_TCP;
@@ -517,7 +504,6 @@ static int transport_test_ipv6_ah(void)
 	}
 
 	ipsec_spd_release_dbs(databases);
-	transport_test_reset_ah_replay();
 	return local_error_count;
 }
 
@@ -559,11 +545,12 @@ static int transport_test_ipv6_esp(void)
 	transport_test_init_ipv6_tcp_packet(original, transport_test_ipv6_src, transport_test_ipv6_dst, 2222, 3333);
 	packet = buffer + TRANSPORT_TEST_HEADROOM;
 	memcpy(packet, original, sizeof(original));
-	transport_test_reset_esp_replay();
 	padding = transport_test_esp_padding((int)sizeof(ipsec_tcp_header) + 2, IPSEC_AES_CBC_BLOCK_SIZE);
 
 	outbound_sa = transport_test_make_ipv6_esp_sa();
 	inbound_sa_template = transport_test_make_ipv6_esp_sa();
+	transport_test_reset_replay(&outbound_sa);
+	transport_test_reset_replay(&inbound_sa_template);
 	inbound_sa_template.sequence_number = 0;
 	ipsec_spd_set_ipv6(&outbound_spd, transport_test_ipv6_src, transport_test_mask_full, transport_test_ipv6_dst, transport_test_mask_full);
 	outbound_spd.protocol = IPSEC_PROTO_TCP;
@@ -627,7 +614,6 @@ static int transport_test_ipv6_esp(void)
 	}
 
 	ipsec_spd_release_dbs(databases);
-	transport_test_reset_esp_replay();
 	return local_error_count;
 }
 
