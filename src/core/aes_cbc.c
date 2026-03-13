@@ -1,6 +1,6 @@
 /*
  * embedded IPsec
- * Copyright (c) 2003 Niklaus Schild and Christian Scheurer, HTI Biel/Bienne
+ * Copyright (c) 2026 Zapmawww
  * All rights reserved.
  */
 
