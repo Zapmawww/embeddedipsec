@@ -3,6 +3,42 @@ cmake_minimum_required(VERSION 3.21)
 project(embeddedipsec VERSION 0.1.0 LANGUAGES C)
 
 option(EMBEDDEDIPSEC_BUILD_TESTS "Build the in-repo structural test harness" ON)
+option(EMBEDDEDIPSEC_ENABLE_AH "Enable Authentication Header support" ON)
+option(EMBEDDEDIPSEC_ENABLE_ESP "Enable Encapsulating Security Payload support" ON)
+option(EMBEDDEDIPSEC_ENABLE_TUNNEL_MODE "Enable IPsec tunnel mode" ON)
+option(EMBEDDEDIPSEC_ENABLE_TRANSPORT_MODE "Enable IPsec transport mode" ON)
+
+if(NOT EMBEDDEDIPSEC_ENABLE_AH AND NOT EMBEDDEDIPSEC_ENABLE_ESP)
+    message(FATAL_ERROR "At least one of EMBEDDEDIPSEC_ENABLE_AH or EMBEDDEDIPSEC_ENABLE_ESP must be ON")
+endif()
+
+if(NOT EMBEDDEDIPSEC_ENABLE_TUNNEL_MODE AND NOT EMBEDDEDIPSEC_ENABLE_TRANSPORT_MODE)
+    message(FATAL_ERROR "At least one of EMBEDDEDIPSEC_ENABLE_TUNNEL_MODE or EMBEDDEDIPSEC_ENABLE_TRANSPORT_MODE must be ON")
+endif()
+
+if(EMBEDDEDIPSEC_ENABLE_AH)
+    set(EMBEDDEDIPSEC_ENABLE_AH_DEFINE 1)
+else()
+    set(EMBEDDEDIPSEC_ENABLE_AH_DEFINE 0)
+endif()
+
+if(EMBEDDEDIPSEC_ENABLE_ESP)
+    set(EMBEDDEDIPSEC_ENABLE_ESP_DEFINE 1)
+else()
+    set(EMBEDDEDIPSEC_ENABLE_ESP_DEFINE 0)
+endif()
+
+if(EMBEDDEDIPSEC_ENABLE_TUNNEL_MODE)
+    set(EMBEDDEDIPSEC_ENABLE_TUNNEL_MODE_DEFINE 1)
+else()
+    set(EMBEDDEDIPSEC_ENABLE_TUNNEL_MODE_DEFINE 0)
+endif()
+
+if(EMBEDDEDIPSEC_ENABLE_TRANSPORT_MODE)
+    set(EMBEDDEDIPSEC_ENABLE_TRANSPORT_MODE_DEFINE 1)
+else()
+    set(EMBEDDEDIPSEC_ENABLE_TRANSPORT_MODE_DEFINE 0)
+endif()
 
 set(EMBEDDEDIPSEC_CORE_SOURCES
     src/core/ah.c
@@ -25,7 +61,11 @@ target_include_directories(embeddedipsec
 target_compile_definitions(embeddedipsec
     PUBLIC
         __NO_TCPIP_STACK__
-    _CRT_SECURE_NO_WARNINGS
+        _CRT_SECURE_NO_WARNINGS
+        IPSEC_ENABLE_AH=${EMBEDDEDIPSEC_ENABLE_AH_DEFINE}
+        IPSEC_ENABLE_ESP=${EMBEDDEDIPSEC_ENABLE_ESP_DEFINE}
+        IPSEC_ENABLE_TUNNEL_MODE=${EMBEDDEDIPSEC_ENABLE_TUNNEL_MODE_DEFINE}
+        IPSEC_ENABLE_TRANSPORT_MODE=${EMBEDDEDIPSEC_ENABLE_TRANSPORT_MODE_DEFINE}
 )
 
 target_compile_features(embeddedipsec PUBLIC c_std_99)
@@ -48,6 +88,7 @@ if(EMBEDDEDIPSEC_BUILD_TESTS)
         src/testing/structural/md5_test.c
         src/testing/structural/sa_test.c
         src/testing/structural/sha1_test.c
+        src/testing/structural/transport_test.c
         src/testing/structural/util_test.c
     )
 

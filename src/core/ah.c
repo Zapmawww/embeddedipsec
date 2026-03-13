@@ -80,6 +80,39 @@ __u32 ipsec_ah_lastSeq 	= 0;         		/**< save session state to detect replays
 											 *   Note: must be initialized with zero (0x00000000) when
 											 *         a new SA is established! */
 
+static void ipsec_ah_save_mutable_fields(const void *packet, __u8 *tos, __u16 *offset, __u8 *hop_limit)
+{
+	if(ipsec_packet_family(packet) == IPSEC_AF_INET6)
+	{
+		*tos = 0;
+		*offset = 0;
+		*hop_limit = ((const ipsec_ipv6_header *)packet)->hop_limit;
+		return;
+	}
+
+	*tos = ((const ipsec_ip_header *)packet)->tos;
+	*offset = ((const ipsec_ip_header *)packet)->offset;
+	*hop_limit = ((const ipsec_ip_header *)packet)->ttl;
+}
+
+static void ipsec_ah_finalize_packet(void *packet, int total_len, __u8 protocol, __u8 tos, __u16 offset, __u8 hop_limit)
+{
+	ipsec_packet_set_total_len(packet, total_len);
+	ipsec_packet_set_protocol(packet, protocol);
+
+	if(ipsec_packet_family(packet) == IPSEC_AF_INET6)
+	{
+		((ipsec_ipv6_header *)packet)->hop_limit = hop_limit;
+		return;
+	}
+
+	((ipsec_ip_header *)packet)->tos = tos;
+	((ipsec_ip_header *)packet)->offset = offset;
+	((ipsec_ip_header *)packet)->ttl = hop_limit;
+	((ipsec_ip_header *)packet)->chksum = 0;
+	((ipsec_ip_header *)packet)->chksum = ipsec_ip_chksum(packet, sizeof(ipsec_ip_header));
+}
+
 static void ipsec_ah_init_outer_ipv4(ipsec_ip_header *header, int total_len, __u32 src, __u32 dst)
 {
 	header->v_hl = 0x45;
@@ -107,17 +140,34 @@ static void ipsec_ah_init_outer_ipv6(ipsec_ipv6_header *header, int total_len, c
 static int ipsec_ah_encapsulate_common(void *inner_packet, int *payload_offset, int *payload_size,
 								 sad_entry *sa, __u8 outer_family, const void *src, const void *dst)
 {
+	#if !IPSEC_ENABLE_AH
+	(void)inner_packet;
+	(void)payload_offset;
+	(void)payload_size;
+	(void)sa;
+	(void)outer_family;
+	(void)src;
+	(void)dst;
+	return IPSEC_STATUS_NOT_IMPLEMENTED;
+	#else
 	int ret_val = IPSEC_STATUS_NOT_INITIALIZED;
 	int outer_header_len;
 	int inner_len;
+	int ip_header_len;
+	int transport_len;
 	__u8 inner_family;
+	__u8 original_protocol;
+	__u8 saved_tos;
+	__u16 saved_offset;
+	__u8 saved_hop_limit;
 	ipsec_ah_header *new_ah_header;
 	unsigned char digest[IPSEC_MAX_AUTHKEY_LEN];
 
 	outer_header_len = outer_family == IPSEC_AF_INET6 ? IPSEC_IPV6_HDR_SIZE : IPSEC_IPV4_HDR_SIZE;
 	inner_family = ipsec_packet_family(inner_packet);
 	inner_len = ipsec_packet_total_len(inner_packet);
-	new_ah_header = (ipsec_ah_header *)(((char *)inner_packet) - IPSEC_AUTH_ICV - IPSEC_AH_HDR_SIZE);
+	ip_header_len = ipsec_packet_header_len(inner_packet);
+	original_protocol = ipsec_packet_protocol(inner_packet);
 
 	if(ipsec_packet_hop_limit(inner_packet) == 0)
 	{
@@ -130,37 +180,76 @@ static int ipsec_ah_encapsulate_common(void *inner_packet, int *payload_offset, 
 	}
 
 	sa->sequence_number++;
+	ipsec_ah_save_mutable_fields(inner_packet, &saved_tos, &saved_offset, &saved_hop_limit);
 
-	new_ah_header->nexthdr = inner_family == IPSEC_AF_INET6 ? IPSEC_PROTO_IPV6 : IPSEC_PROTO_IPIP;
-	new_ah_header->len = 0x04;
-	new_ah_header->reserved = 0x0000;
-	new_ah_header->spi = sa->spi;
-	new_ah_header->sequence = ipsec_htonl(sa->sequence_number);
-	memset(new_ah_header->ah_data, '\0', IPSEC_AUTH_ICV);
-
-	if(outer_family == IPSEC_AF_INET6)
+	if(sa->mode == IPSEC_TRANSPORT)
 	{
-		ipsec_ah_init_outer_ipv6((ipsec_ipv6_header *)(((char *)inner_packet) - IPSEC_AH_HDR_SIZE - IPSEC_AUTH_ICV - outer_header_len),
-								   inner_len + IPSEC_AH_HDR_SIZE + IPSEC_AUTH_ICV + outer_header_len,
-								   (const __u8 *)src, (const __u8 *)dst);
+		#if !IPSEC_ENABLE_TRANSPORT_MODE
+		return IPSEC_STATUS_NOT_IMPLEMENTED;
+		#else
+		transport_len = inner_len - ip_header_len;
+		memmove(((unsigned char *)inner_packet) + ip_header_len + IPSEC_AH_HDR_SIZE + IPSEC_AUTH_ICV,
+				((unsigned char *)inner_packet) + ip_header_len,
+				transport_len);
+		new_ah_header = (ipsec_ah_header *)(((unsigned char *)inner_packet) + ip_header_len);
+		new_ah_header->nexthdr = original_protocol;
+		new_ah_header->len = 0x04;
+		new_ah_header->reserved = 0x0000;
+		new_ah_header->spi = sa->spi;
+		new_ah_header->sequence = ipsec_htonl(sa->sequence_number);
+		memset(new_ah_header->ah_data, '\0', IPSEC_AUTH_ICV);
+
+		ipsec_ah_finalize_packet(inner_packet,
+						 inner_len + IPSEC_AH_HDR_SIZE + IPSEC_AUTH_ICV,
+						 IPSEC_PROTO_AH,
+						 0,
+						 0,
+						 0);
+		ipsec_packet_zero_mutable_fields(inner_packet);
+		#endif
+	}
+	else if(sa->mode == IPSEC_TUNNEL)
+	{
+		#if !IPSEC_ENABLE_TUNNEL_MODE
+		return IPSEC_STATUS_NOT_IMPLEMENTED;
+		#else
+		new_ah_header = (ipsec_ah_header *)(((char *)inner_packet) - IPSEC_AUTH_ICV - IPSEC_AH_HDR_SIZE);
+		new_ah_header->nexthdr = inner_family == IPSEC_AF_INET6 ? IPSEC_PROTO_IPV6 : IPSEC_PROTO_IPIP;
+		new_ah_header->len = 0x04;
+		new_ah_header->reserved = 0x0000;
+		new_ah_header->spi = sa->spi;
+		new_ah_header->sequence = ipsec_htonl(sa->sequence_number);
+		memset(new_ah_header->ah_data, '\0', IPSEC_AUTH_ICV);
+
+		if(outer_family == IPSEC_AF_INET6)
+		{
+			ipsec_ah_init_outer_ipv6((ipsec_ipv6_header *)(((char *)inner_packet) - IPSEC_AH_HDR_SIZE - IPSEC_AUTH_ICV - outer_header_len),
+							   inner_len + IPSEC_AH_HDR_SIZE + IPSEC_AUTH_ICV + outer_header_len,
+							   (const __u8 *)src, (const __u8 *)dst);
+		}
+		else
+		{
+			ipsec_ip_header *new_ip_header;
+			new_ip_header = (ipsec_ip_header *)(((char *)inner_packet) - IPSEC_AH_HDR_SIZE - IPSEC_AUTH_ICV - outer_header_len);
+			ipsec_ah_init_outer_ipv4(new_ip_header, inner_len + IPSEC_AH_HDR_SIZE + IPSEC_AUTH_ICV + outer_header_len,
+							 *((const __u32 *)src), *((const __u32 *)dst));
+		}
+		#endif
 	}
 	else
 	{
-		ipsec_ip_header *new_ip_header;
-		new_ip_header = (ipsec_ip_header *)(((char *)inner_packet) - IPSEC_AH_HDR_SIZE - IPSEC_AUTH_ICV - outer_header_len);
-		ipsec_ah_init_outer_ipv4(new_ip_header, inner_len + IPSEC_AH_HDR_SIZE + IPSEC_AUTH_ICV + outer_header_len,
-								 *((const __u32 *)src), *((const __u32 *)dst));
+		return IPSEC_STATUS_NOT_IMPLEMENTED;
 	}
 
 	switch(sa->auth_alg) {
 		case IPSEC_HMAC_MD5:
-			hmac_md5((unsigned char *)(((char *)inner_packet) - IPSEC_AH_HDR_SIZE - IPSEC_AUTH_ICV - outer_header_len),
-				 inner_len + IPSEC_AH_HDR_SIZE + IPSEC_AUTH_ICV + outer_header_len,
+			hmac_md5((unsigned char *)(sa->mode == IPSEC_TRANSPORT ? inner_packet : (((char *)inner_packet) - IPSEC_AH_HDR_SIZE - IPSEC_AUTH_ICV - outer_header_len)),
+				 (sa->mode == IPSEC_TRANSPORT ? inner_len + IPSEC_AH_HDR_SIZE + IPSEC_AUTH_ICV : inner_len + IPSEC_AH_HDR_SIZE + IPSEC_AUTH_ICV + outer_header_len),
 				 (unsigned char *)sa->authkey, IPSEC_AUTH_MD5_KEY_LEN, (unsigned char *)&digest);
 			break;
 		case IPSEC_HMAC_SHA1:
-			hmac_sha1((unsigned char *)(((char *)inner_packet) - IPSEC_AH_HDR_SIZE - IPSEC_AUTH_ICV - outer_header_len),
-				  inner_len + IPSEC_AH_HDR_SIZE + IPSEC_AUTH_ICV + outer_header_len,
+			hmac_sha1((unsigned char *)(sa->mode == IPSEC_TRANSPORT ? inner_packet : (((char *)inner_packet) - IPSEC_AH_HDR_SIZE - IPSEC_AUTH_ICV - outer_header_len)),
+				  (sa->mode == IPSEC_TRANSPORT ? inner_len + IPSEC_AH_HDR_SIZE + IPSEC_AUTH_ICV : inner_len + IPSEC_AH_HDR_SIZE + IPSEC_AUTH_ICV + outer_header_len),
 				  (unsigned char *)sa->authkey, IPSEC_AUTH_SHA1_KEY_LEN, (unsigned char *)&digest);
 			break;
 		default:
@@ -168,6 +257,19 @@ static int ipsec_ah_encapsulate_common(void *inner_packet, int *payload_offset, 
 	}
 
 	memcpy(new_ah_header->ah_data, digest, IPSEC_AUTH_ICV);
+
+	if(sa->mode == IPSEC_TRANSPORT)
+	{
+		ipsec_ah_finalize_packet(inner_packet,
+						 inner_len + IPSEC_AH_HDR_SIZE + IPSEC_AUTH_ICV,
+						 IPSEC_PROTO_AH,
+						 saved_tos,
+						 saved_offset,
+						 saved_hop_limit);
+		*payload_size = inner_len + IPSEC_AH_HDR_SIZE + IPSEC_AUTH_ICV;
+		*payload_offset = 0;
+		return IPSEC_STATUS_SUCCESS;
+	}
 
 	if(outer_family == IPSEC_AF_INET6)
 	{
@@ -188,6 +290,7 @@ static int ipsec_ah_encapsulate_common(void *inner_packet, int *payload_offset, 
 
 	ret_val = IPSEC_STATUS_SUCCESS;
 	return ret_val;
+	#endif
 }
 
 
@@ -210,11 +313,23 @@ static int ipsec_ah_encapsulate_common(void *inner_packet, int *payload_offset, 
 int ipsec_ah_check(void *outer_packet, int *payload_offset, int *payload_size,
  				    sad_entry *sa)
 {
+	#if !IPSEC_ENABLE_AH
+	(void)outer_packet;
+	(void)payload_offset;
+	(void)payload_size;
+	(void)sa;
+	return IPSEC_STATUS_NOT_IMPLEMENTED;
+	#else
 	int ret_val 	= IPSEC_STATUS_NOT_INITIALIZED;	/* by default, the return value is undefined */
 	ipsec_ah_header *ah_header;
 	int ah_len;
 	int ah_offs;
 	int packet_len;
+	int new_len;
+	__u8 saved_tos;
+	__u16 saved_offset;
+	__u8 saved_hop_limit;
+	__u8 original_protocol;
 	unsigned char orig_digest[IPSEC_MAX_AUTHKEY_LEN];
 	unsigned char digest[IPSEC_MAX_AUTHKEY_LEN];
 
@@ -248,7 +363,9 @@ int ipsec_ah_check(void *outer_packet, int *payload_offset, int *payload_size,
 		return ret_val;
 	}
 	
- 	/* zero all mutable fields prior to ICV calculation */
+	ipsec_ah_save_mutable_fields(outer_packet, &saved_tos, &saved_offset, &saved_hop_limit);
+
+	/* zero all mutable fields prior to ICV calculation */
 	/* mutuable fields according to RFC2402, 3.3.3.1.1.1. */
 	ipsec_packet_zero_mutable_fields(outer_packet);
 
@@ -256,9 +373,9 @@ int ipsec_ah_check(void *outer_packet, int *payload_offset, int *payload_size,
 	memcpy(orig_digest, ah_header->ah_data, IPSEC_AUTH_ICV);
 	memset(((ipsec_ah_header *)((unsigned char *)outer_packet + ah_offs))->ah_data, '\0', IPSEC_AUTH_ICV);
 
-	if(sa->mode != IPSEC_TUNNEL)
+	if((sa->mode != IPSEC_TUNNEL) && (sa->mode != IPSEC_TRANSPORT))
 	{
-		IPSEC_LOG_ERR("ipsec_ah_check", IPSEC_STATUS_NOT_IMPLEMENTED, ("Can't handle mode %d. Only mode %d (IPSEC_TUNNEL) is implemented.", sa->mode, IPSEC_TUNNEL) );
+		IPSEC_LOG_ERR("ipsec_ah_check", IPSEC_STATUS_NOT_IMPLEMENTED, ("Can't handle mode %d.", sa->mode) );
 		IPSEC_LOG_TRC(IPSEC_TRACE_RETURN, "ipsec_ah_check", ("return = %d", IPSEC_STATUS_NOT_IMPLEMENTED) );
 		return IPSEC_STATUS_NOT_IMPLEMENTED;
 	}
@@ -292,12 +409,42 @@ int ipsec_ah_check(void *outer_packet, int *payload_offset, int *payload_size,
 		IPSEC_LOG_AUD("ipsec_ah_check", IPSEC_AUDIT_SEQ_MISMATCH, ("packet rejected by anti-replay update (lastSeq=%08lx, seq=%08lx, window size=%d)", ipsec_ah_lastSeq, ipsec_ntohl(ah_header->sequence), IPSEC_SEQ_MAX_WINDOW) );
 		return ret_val;
 	}
-	
-	*payload_offset = ah_offs + ah_len;
-	*payload_size   = ipsec_packet_total_len((unsigned char *)outer_packet + ah_offs + ah_len);
 
-	IPSEC_LOG_TRC(IPSEC_TRACE_RETURN, "ipsec_ah_check", ("return = %d", IPSEC_STATUS_NOT_IMPLEMENTED) );
+	if(sa->mode == IPSEC_TRANSPORT)
+	{
+		#if !IPSEC_ENABLE_TRANSPORT_MODE
+		IPSEC_LOG_TRC(IPSEC_TRACE_RETURN, "ipsec_ah_check", ("return = %d", IPSEC_STATUS_NOT_IMPLEMENTED) );
+		return IPSEC_STATUS_NOT_IMPLEMENTED;
+		#else
+		original_protocol = ah_header->nexthdr;
+		new_len = packet_len - ah_len;
+		memmove(((unsigned char *)outer_packet) + ah_offs,
+				((unsigned char *)outer_packet) + ah_offs + ah_len,
+				packet_len - ah_offs - ah_len);
+		ipsec_ah_finalize_packet(outer_packet, new_len, original_protocol, saved_tos, saved_offset, saved_hop_limit);
+		*payload_offset = 0;
+		*payload_size = new_len;
+		#endif
+	}
+	else if(sa->mode == IPSEC_TUNNEL)
+	{
+		#if !IPSEC_ENABLE_TUNNEL_MODE
+		IPSEC_LOG_TRC(IPSEC_TRACE_RETURN, "ipsec_ah_check", ("return = %d", IPSEC_STATUS_NOT_IMPLEMENTED) );
+		return IPSEC_STATUS_NOT_IMPLEMENTED;
+		#else
+		*payload_offset = ah_offs + ah_len;
+		*payload_size   = ipsec_packet_total_len((unsigned char *)outer_packet + ah_offs + ah_len);
+		#endif
+	}
+	else
+	{
+		IPSEC_LOG_TRC(IPSEC_TRACE_RETURN, "ipsec_ah_check", ("return = %d", IPSEC_STATUS_NOT_IMPLEMENTED) );
+		return IPSEC_STATUS_NOT_IMPLEMENTED;
+	}
+
+	IPSEC_LOG_TRC(IPSEC_TRACE_RETURN, "ipsec_ah_check", ("return = %d", IPSEC_STATUS_SUCCESS) );
 	return IPSEC_STATUS_SUCCESS;
+	#endif
 }
 
 

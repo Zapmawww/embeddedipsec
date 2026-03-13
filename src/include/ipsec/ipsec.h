@@ -52,6 +52,30 @@
 #define IPSEC_MTU            (1400)  /**< standalone maximum packet size when no TCP/IP stack is present */
 #endif
 
+#ifndef IPSEC_ENABLE_AH
+#define IPSEC_ENABLE_AH              (1)
+#endif
+
+#ifndef IPSEC_ENABLE_ESP
+#define IPSEC_ENABLE_ESP             (1)
+#endif
+
+#ifndef IPSEC_ENABLE_TUNNEL_MODE
+#define IPSEC_ENABLE_TUNNEL_MODE     (1)
+#endif
+
+#ifndef IPSEC_ENABLE_TRANSPORT_MODE
+#define IPSEC_ENABLE_TRANSPORT_MODE  (1)
+#endif
+
+#if !IPSEC_ENABLE_AH && !IPSEC_ENABLE_ESP
+#error At least one IPsec protocol must be enabled.
+#endif
+
+#if !IPSEC_ENABLE_TUNNEL_MODE && !IPSEC_ENABLE_TRANSPORT_MODE
+#error At least one IPsec mode must be enabled.
+#endif
+
 
 #define IPSEC_DES_KEY_LEN		(8)							/**< Defines the size of a DES key in bytes */
 #define IPSEC_3DES_KEY_LEN		(IPSEC_DES_KEY_LEN*3)		/**< Defines the length of a 3DES key in bytes */

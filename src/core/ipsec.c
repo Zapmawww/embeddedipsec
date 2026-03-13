@@ -61,6 +61,23 @@
 #include "ipsec/ah.h"
 #include "ipsec/esp.h"
 
+static int ipsec_mode_supported(__u8 mode)
+{
+	switch(mode)
+	{
+#if IPSEC_ENABLE_TUNNEL_MODE
+		case IPSEC_TUNNEL:
+			return 1;
+#endif
+#if IPSEC_ENABLE_TRANSPORT_MODE
+		case IPSEC_TRANSPORT:
+			return 1;
+#endif
+		default:
+			return 0;
+	}
+}
+
 static int ipsec_output_common(unsigned char *packet, int packet_size, int *payload_offset, int *payload_size,
 						   spd_entry *spd, __u8 outer_family, const void *src, const void *dst)
 {
@@ -87,7 +104,14 @@ static int ipsec_output_common(unsigned char *packet, int packet_size, int *payl
 		return IPSEC_STATUS_NO_SA_FOUND;
 	}
 
+	if(!ipsec_mode_supported(spd->sa->mode))
+	{
+		IPSEC_LOG_ERR("ipsec_output", IPSEC_STATUS_NOT_IMPLEMENTED, ("transmission mode %d is disabled at compile time", spd->sa->mode));
+		return IPSEC_STATUS_NOT_IMPLEMENTED;
+	}
+
 	switch(spd->sa->protocol) {
+#if IPSEC_ENABLE_AH
 		case IPSEC_PROTO_AH:
 			IPSEC_LOG_MSG("ipsec_output", ("have to encapsulate an AH packet")) ;
 			if(outer_family == IPSEC_AF_INET6)
@@ -105,7 +129,9 @@ static int ipsec_output_common(unsigned char *packet, int packet_size, int *payl
 				IPSEC_LOG_ERR("ipsec_output", ret_val, ("ipsec_ah_encapsulate() failed"));
 			}
 			break;
+#endif
 
+#if IPSEC_ENABLE_ESP
 		case IPSEC_PROTO_ESP:
 			IPSEC_LOG_MSG("ipsec_output", ("have to encapsulate an ESP packet")) ;
 			if(outer_family == IPSEC_AF_INET6)
@@ -123,10 +149,11 @@ static int ipsec_output_common(unsigned char *packet, int packet_size, int *payl
 				IPSEC_LOG_ERR("ipsec_output", ret_val, ("ipsec_esp_encapsulate() failed"));
 			}
 			break;
+#endif
 
 		default:
-			ret_val = IPSEC_STATUS_BAD_PROTOCOL;
-			IPSEC_LOG_ERR("ipsec_output", ret_val, ("unsupported protocol '%d' in spd->sa->protocol", spd->sa->protocol));
+			ret_val = IPSEC_STATUS_NOT_IMPLEMENTED;
+			IPSEC_LOG_ERR("ipsec_output", ret_val, ("protocol '%d' is disabled at compile time or unsupported", spd->sa->protocol));
 	}
 
 	return ret_val;
@@ -185,13 +212,14 @@ int ipsec_input(unsigned char *packet, int packet_size,
 		return IPSEC_STATUS_FAILURE;
 	}
 
-	if(sa->mode != IPSEC_TUNNEL) 
+	if(!ipsec_mode_supported(sa->mode)) 
 	{
-		IPSEC_LOG_ERR("ipsec_input", IPSEC_STATUS_FAILURE, ("unsupported transmission mode (only IPSEC_TUNNEL is supported)") );
-		IPSEC_LOG_TRC(IPSEC_TRACE_RETURN, "ipsec_input", ("return = %d", IPSEC_STATUS_FAILURE) );
-		return IPSEC_STATUS_FAILURE;
+		IPSEC_LOG_ERR("ipsec_input", IPSEC_STATUS_NOT_IMPLEMENTED, ("transmission mode %d is disabled at compile time", sa->mode) );
+		IPSEC_LOG_TRC(IPSEC_TRACE_RETURN, "ipsec_input", ("return = %d", IPSEC_STATUS_NOT_IMPLEMENTED) );
+		return IPSEC_STATUS_NOT_IMPLEMENTED;
 	}
 
+	#if IPSEC_ENABLE_AH
 	if(sa->protocol == IPSEC_PROTO_AH)
 	{
 		ret_val = ipsec_ah_check(packet, payload_offset, payload_size, sa);
@@ -202,7 +230,11 @@ int ipsec_input(unsigned char *packet, int packet_size,
 			return ret_val;
 		}
 
-	} else if (sa->protocol == IPSEC_PROTO_ESP)
+	}
+	else
+	#endif
+	#if IPSEC_ENABLE_ESP
+	if (sa->protocol == IPSEC_PROTO_ESP)
 	{
 		ret_val = ipsec_esp_decapsulate(packet, payload_offset, payload_size, sa);
 		if(ret_val != IPSEC_STATUS_SUCCESS) 
@@ -212,11 +244,13 @@ int ipsec_input(unsigned char *packet, int packet_size,
 			return ret_val;
 		}
 
-	} else
+	}
+	else
+	#endif
 	{
-		IPSEC_LOG_ERR("ipsec_input", IPSEC_STATUS_FAILURE, ("invalid protocol from SA") );
-		IPSEC_LOG_TRC(IPSEC_TRACE_RETURN, "ipsec_input", ("ret_val=%d", IPSEC_STATUS_FAILURE) );
-		return IPSEC_STATUS_FAILURE;
+		IPSEC_LOG_ERR("ipsec_input", IPSEC_STATUS_NOT_IMPLEMENTED, ("protocol %d is disabled at compile time or unsupported", sa->protocol) );
+		IPSEC_LOG_TRC(IPSEC_TRACE_RETURN, "ipsec_input", ("ret_val=%d", IPSEC_STATUS_NOT_IMPLEMENTED) );
+		return IPSEC_STATUS_NOT_IMPLEMENTED;
 	}
 
 	inner_ip = (void *)(packet + *payload_offset) ;

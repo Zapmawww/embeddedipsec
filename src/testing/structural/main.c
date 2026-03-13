@@ -74,6 +74,7 @@ extern void des_test(test_result *);
 extern void md5_test(test_result *);
 extern void sha1_test(test_result *);
 extern void ipv6_test(test_result *);
+extern void transport_test(test_result *);
 extern void sa_test(test_result *) ;
 extern void ah_test(test_result *) ;
 extern void esp_test(test_result *) ;
@@ -90,10 +91,19 @@ test_set test_function_set[] =
 			{ des_test, 		"des_test"			},
 			{ md5_test, 		"md5_test"			}, 
 			{ sha1_test,		"sha1_test"			},
+			#if IPSEC_ENABLE_TUNNEL_MODE && (IPSEC_ENABLE_AH || IPSEC_ENABLE_ESP)
 			{ ipv6_test,		"ipv6_test"			},
+			#endif
+			#if IPSEC_ENABLE_TRANSPORT_MODE && (IPSEC_ENABLE_AH || IPSEC_ENABLE_ESP)
+			{ transport_test,	"transport_test"	},
+			#endif
 			{ sa_test, 			"sa_test"			},
+			#if IPSEC_ENABLE_AH && IPSEC_ENABLE_TUNNEL_MODE
 			{ ah_test, 			"ah_test"			},
+			#endif
+			#if IPSEC_ENABLE_ESP && IPSEC_ENABLE_TUNNEL_MODE
 			{ esp_test,			"esp_test"			}
+			#endif
 } ;
 
 #define NR_OF_TESTFUNCTIONS sizeof(test_function_set)/sizeof(test_set) /**< defines the number of test functions */

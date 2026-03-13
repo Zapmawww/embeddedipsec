@@ -543,28 +543,37 @@ static int ipv6_test_input_esp(void)
 
 void ipv6_test(test_result *global_results)
 {
-	test_result sub_results = {
-		9,
-		3,
-		0,
-		0,
-	};
+	test_result sub_results = {0, 0, 0, 0};
 	int retcode;
 
+	sub_results.tests += 2;
+	sub_results.functions += 1;
 	retcode = ipv6_test_spd_sad_lookup();
 	IPSEC_TESTING_EVALUATE(retcode, sub_results, "ipv6_test_spd_sad_lookup()", (""));
 
+	#if IPSEC_ENABLE_AH && IPSEC_ENABLE_TUNNEL_MODE
+	sub_results.tests += 3;
+	sub_results.functions += 1;
 	retcode = ipv6_test_ah_roundtrip();
 	IPSEC_TESTING_EVALUATE(retcode, sub_results, "ipv6_test_ah_roundtrip()", (""));
 
+	sub_results.tests += 2;
+	sub_results.functions += 1;
+	retcode = ipv6_test_input_ah();
+	IPSEC_TESTING_EVALUATE(retcode, sub_results, "ipv6_test_input_ah()", (""));
+	#endif
+
+	#if IPSEC_ENABLE_ESP && IPSEC_ENABLE_TUNNEL_MODE
+	sub_results.tests += 2;
+	sub_results.functions += 1;
 	retcode = ipv6_test_esp_roundtrip();
 	IPSEC_TESTING_EVALUATE(retcode, sub_results, "ipv6_test_esp_roundtrip()", (""));
 
-	retcode = ipv6_test_input_ah();
-	IPSEC_TESTING_EVALUATE(retcode, sub_results, "ipv6_test_input_ah()", (""));
-
+	sub_results.tests += 2;
+	sub_results.functions += 1;
 	retcode = ipv6_test_input_esp();
 	IPSEC_TESTING_EVALUATE(retcode, sub_results, "ipv6_test_input_esp()", (""));
+	#endif
 
 	global_results->tests += sub_results.tests;
 	global_results->functions += sub_results.functions;

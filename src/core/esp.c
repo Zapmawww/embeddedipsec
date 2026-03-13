@@ -81,6 +81,18 @@ __u32 ipsec_esp_lastSeq	= 0;         		/**< save session state to detect replays
 
 static __u8 ipsec_esp_get_padding(int len);
 
+static void ipsec_esp_finalize_packet(void *packet, int total_len, __u8 protocol)
+{
+	ipsec_packet_set_total_len(packet, total_len);
+	ipsec_packet_set_protocol(packet, protocol);
+
+	if(ipsec_packet_family(packet) == IPSEC_AF_INET)
+	{
+		((ipsec_ip_header *)packet)->chksum = 0;
+		((ipsec_ip_header *)packet)->chksum = ipsec_ip_chksum(packet, sizeof(ipsec_ip_header));
+	}
+}
+
 static void ipsec_esp_init_outer_ipv4(ipsec_ip_header *header, int total_len, __u32 src, __u32 dst)
 {
 	header->v_hl = 0x45;
@@ -108,29 +120,121 @@ static void ipsec_esp_init_outer_ipv6(ipsec_ipv6_header *header, int total_len, 
 static ipsec_status ipsec_esp_encapsulate_common(void *packet, int *offset, int *len, sad_entry *sa,
 									 __u8 outer_family, const void *src_addr, const void *dest_addr)
 {
+	#if !IPSEC_ENABLE_ESP
+	(void)packet;
+	(void)offset;
+	(void)len;
+	(void)sa;
+	(void)outer_family;
+	(void)src_addr;
+	(void)dest_addr;
+	return IPSEC_STATUS_NOT_IMPLEMENTED;
+	#else
 	ipsec_status ret_val = IPSEC_STATUS_NOT_INITIALIZED;
 	int outer_header_len;
 	int inner_len;
+	int ip_header_len;
+	int transport_len;
+	#if IPSEC_ENABLE_TUNNEL_MODE
 	int payload_offset;
+	#endif
 	int payload_len;
 	__u8 padd_len;
 	__u8 *pos;
 	__u8 padd;
+	__u8 original_protocol;
 	ipsec_esp_header *new_esp_header;
 	unsigned char iv[IPSEC_ESP_IV_SIZE] = {0xD4, 0xDB, 0xAB, 0x9A, 0x9A, 0xDB, 0xD1, 0x94};
 	unsigned char cbc_iv[IPSEC_ESP_IV_SIZE];
 	unsigned char digest[IPSEC_MAX_AUTHKEY_LEN];
+	#if IPSEC_ENABLE_TUNNEL_MODE
 	__u8 next_proto;
+	#endif
 
 	outer_header_len = outer_family == IPSEC_AF_INET6 ? IPSEC_IPV6_HDR_SIZE : IPSEC_IPV4_HDR_SIZE;
-	new_esp_header = (ipsec_esp_header *)(((char *)packet) - IPSEC_ESP_IV_SIZE - IPSEC_ESP_HDR_SIZE);
-	payload_offset = (((char *)packet) - (((char *)packet) - IPSEC_ESP_IV_SIZE - IPSEC_ESP_HDR_SIZE - outer_header_len));
 	inner_len = ipsec_packet_total_len(packet);
+	ip_header_len = ipsec_packet_header_len(packet);
+	original_protocol = ipsec_packet_protocol(packet);
 
 	if(ipsec_packet_hop_limit(packet) == 0)
 	{
 		return IPSEC_STATUS_TTL_EXPIRED;
 	}
+
+	if(sa->mode == IPSEC_TRANSPORT)
+	{
+		#if !IPSEC_ENABLE_TRANSPORT_MODE
+		return IPSEC_STATUS_NOT_IMPLEMENTED;
+		#else
+		transport_len = inner_len - ip_header_len;
+		padd_len = ipsec_esp_get_padding(transport_len + 2);
+		new_esp_header = (ipsec_esp_header *)(((unsigned char *)packet) + ip_header_len);
+		memmove(((unsigned char *)packet) + ip_header_len + IPSEC_ESP_HDR_SIZE + IPSEC_ESP_IV_SIZE,
+				((unsigned char *)packet) + ip_header_len,
+				transport_len);
+
+		pos = ((__u8 *)packet) + ip_header_len + IPSEC_ESP_HDR_SIZE + IPSEC_ESP_IV_SIZE + transport_len;
+		if(padd_len != 0)
+		{
+			padd = 1;
+			while(padd <= padd_len)
+			{
+				*pos++ = padd++;
+			}
+		}
+
+		*pos++ = padd_len;
+		*pos = original_protocol;
+		payload_len = IPSEC_ESP_HDR_SIZE + IPSEC_ESP_IV_SIZE + transport_len + padd_len + 2;
+
+		if(sa->enc_alg == IPSEC_3DES)
+		{
+			memcpy(cbc_iv, iv, IPSEC_ESP_IV_SIZE);
+			cipher_3des_cbc((__u8 *)packet + ip_header_len + IPSEC_ESP_HDR_SIZE + IPSEC_ESP_IV_SIZE,
+					 transport_len + padd_len + 2, (__u8 *)sa->enckey, (__u8 *)&cbc_iv,
+					 DES_ENCRYPT, (__u8 *)packet + ip_header_len + IPSEC_ESP_HDR_SIZE + IPSEC_ESP_IV_SIZE);
+		}
+
+		memcpy(((__u8 *)packet) + ip_header_len + IPSEC_ESP_HDR_SIZE, iv, IPSEC_ESP_IV_SIZE);
+		new_esp_header->spi = sa->spi;
+		sa->sequence_number++;
+		new_esp_header->sequence_number = ipsec_htonl(sa->sequence_number);
+
+		if(sa->auth_alg != 0)
+		{
+			switch(sa->auth_alg) {
+				case IPSEC_HMAC_MD5:
+					hmac_md5((unsigned char *)new_esp_header, payload_len,
+						 (unsigned char *)sa->authkey, IPSEC_AUTH_MD5_KEY_LEN, (unsigned char *)&digest);
+					break;
+				case IPSEC_HMAC_SHA1:
+					hmac_sha1((unsigned char *)new_esp_header, payload_len,
+						  (unsigned char *)sa->authkey, IPSEC_AUTH_SHA1_KEY_LEN, (unsigned char *)&digest);
+					break;
+				default:
+					return IPSEC_STATUS_FAILURE;
+			}
+
+			memcpy(((char *)new_esp_header) + payload_len, digest, IPSEC_AUTH_ICV);
+			payload_len += IPSEC_AUTH_ICV;
+		}
+
+		ipsec_esp_finalize_packet(packet, ip_header_len + payload_len, IPSEC_PROTO_ESP);
+		*offset = 0;
+		*len = ip_header_len + payload_len;
+		return IPSEC_STATUS_SUCCESS;
+		#endif
+	}
+	else if(sa->mode != IPSEC_TUNNEL)
+	{
+		return IPSEC_STATUS_NOT_IMPLEMENTED;
+	}
+	#if !IPSEC_ENABLE_TUNNEL_MODE
+	return IPSEC_STATUS_NOT_IMPLEMENTED;
+	#else
+
+	new_esp_header = (ipsec_esp_header *)(((char *)packet) - IPSEC_ESP_IV_SIZE - IPSEC_ESP_HDR_SIZE);
+	payload_offset = (((char *)packet) - (((char *)packet) - IPSEC_ESP_IV_SIZE - IPSEC_ESP_HDR_SIZE - outer_header_len));
 
 	padd_len = ipsec_esp_get_padding(inner_len + 2);
 	pos = ((__u8 *)packet) + inner_len;
@@ -201,6 +305,8 @@ static ipsec_status ipsec_esp_encapsulate_common(void *packet, int *offset, int 
 	*offset = payload_offset * (-1);
 	*len = payload_len + outer_header_len;
 	return IPSEC_STATUS_SUCCESS;
+	#endif
+	#endif
 }
 
 
@@ -234,15 +340,28 @@ __u8 ipsec_esp_get_padding(int len)
  */
 ipsec_status ipsec_esp_decapsulate(void *packet, int *offset, int *len, sad_entry *sa)
  {
+	#if !IPSEC_ENABLE_ESP
+	(void)packet;
+	(void)offset;
+	(void)len;
+	(void)sa;
+	return IPSEC_STATUS_NOT_IMPLEMENTED;
+	#else
 	int ret_val = IPSEC_STATUS_NOT_INITIALIZED;			/* by default, the return value is undefined */
 	int				ip_header_len ;
 	int					local_len ;
 	int					payload_offset ;
 	int					payload_len ;
+	#if IPSEC_ENABLE_TUNNEL_MODE
 	void				*new_ip_packet ;
+	#endif
 	esp_packet			*esp_header ;			
 	char 				cbc_iv[IPSEC_ESP_IV_SIZE] ;
 	unsigned char 		digest[IPSEC_MAX_AUTHKEY_LEN];
+	int				packet_len;
+	int				transport_len;
+	__u8				pad_len;
+	__u8				next_proto;
 
 	IPSEC_LOG_TRC(IPSEC_TRACE_ENTER, 
 	              "ipsec_esp_decapsulate", 
@@ -254,6 +373,7 @@ ipsec_status ipsec_esp_decapsulate(void *packet, int *offset, int *len, sad_entr
 	esp_header = (esp_packet*)(((char*)packet)+ip_header_len) ; 
 	payload_offset = ip_header_len + IPSEC_ESP_SPI_SIZE + IPSEC_ESP_SEQ_SIZE ;
 	payload_len = ipsec_packet_total_len(packet) - ip_header_len - IPSEC_ESP_HDR_SIZE ;
+	packet_len = ipsec_packet_total_len(packet);
 
 
 	if(sa->auth_alg != 0)
@@ -319,6 +439,37 @@ ipsec_status ipsec_esp_decapsulate(void *packet, int *offset, int *len, sad_entr
 						 DES_DECRYPT, ((char*)packet)+payload_offset + IPSEC_ESP_IV_SIZE);
 	}
 
+	if(sa->mode == IPSEC_TRANSPORT)
+	{
+		#if !IPSEC_ENABLE_TRANSPORT_MODE
+		IPSEC_LOG_TRC(IPSEC_TRACE_RETURN, "ipsec_esp_decapsulate", ("return = %d", IPSEC_STATUS_NOT_IMPLEMENTED) );
+		return IPSEC_STATUS_NOT_IMPLEMENTED;
+		#else
+		transport_len = payload_len - IPSEC_ESP_IV_SIZE;
+		pad_len = *(((unsigned char *)packet) + payload_offset + IPSEC_ESP_IV_SIZE + transport_len - 2);
+		next_proto = *(((unsigned char *)packet) + payload_offset + IPSEC_ESP_IV_SIZE + transport_len - 1);
+		local_len = ip_header_len + transport_len - pad_len - 2;
+		memmove(((unsigned char *)packet) + ip_header_len,
+				((unsigned char *)packet) + payload_offset + IPSEC_ESP_IV_SIZE,
+				local_len - ip_header_len);
+		ipsec_esp_finalize_packet(packet, local_len, next_proto);
+		*offset = 0;
+		*len = local_len;
+		sa->sequence_number++ ;
+		IPSEC_LOG_TRC(IPSEC_TRACE_RETURN, "ipsec_esp_decapsulate", ("return = %d", IPSEC_STATUS_SUCCESS) );
+		return IPSEC_STATUS_SUCCESS;
+		#endif
+	}
+	else if(sa->mode != IPSEC_TUNNEL)
+	{
+		IPSEC_LOG_TRC(IPSEC_TRACE_RETURN, "ipsec_esp_decapsulate", ("return = %d", IPSEC_STATUS_NOT_IMPLEMENTED) );
+		return IPSEC_STATUS_NOT_IMPLEMENTED;
+	}
+	#if !IPSEC_ENABLE_TUNNEL_MODE
+	IPSEC_LOG_TRC(IPSEC_TRACE_RETURN, "ipsec_esp_decapsulate", ("return = %d", IPSEC_STATUS_NOT_IMPLEMENTED) );
+	return IPSEC_STATUS_NOT_IMPLEMENTED;
+	#else
+
 	*offset = payload_offset+IPSEC_ESP_IV_SIZE ;
 
 	new_ip_packet = (void *)(((char*)packet) + payload_offset + IPSEC_ESP_IV_SIZE) ;
@@ -336,6 +487,8 @@ ipsec_status ipsec_esp_decapsulate(void *packet, int *offset, int *len, sad_entr
 
 	IPSEC_LOG_TRC(IPSEC_TRACE_RETURN, "ipsec_esp_decapsulate", ("return = %d", IPSEC_STATUS_SUCCESS) );
 	return IPSEC_STATUS_SUCCESS;
+	#endif
+	#endif
  }
 
 /**
