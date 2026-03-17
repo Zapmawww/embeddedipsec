@@ -62,9 +62,9 @@ typedef struct ah_hdr_struct
 } ipsec_ah_header;
 
 
-int ipsec_ah_check(void *, int *, int *, void *);
-int ipsec_ah_encapsulate(ipsec_ip_header *, int *, int *, void *, __u32, __u32);
-int ipsec_ah_encapsulate_ipv6(void *, int *, int *, void *, const __u8 *, const __u8 *);
+int ipsec_ah_check(void *, int *, int *, sad_entry *);
+int ipsec_ah_encapsulate(ipsec_ip_header *, int *, int *, sad_entry *, __u32, __u32);
+int ipsec_ah_encapsulate_ipv6(void *, int *, int *, sad_entry *, const __u8 *, const __u8 *);
 
 #endif
 

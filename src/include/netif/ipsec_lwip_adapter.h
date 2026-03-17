@@ -45,6 +45,14 @@
 #define IPSEC_LWIP_WORKBUF_TAILROOM (IPSEC_HLEN)
 #define IPSEC_LWIP_WORKBUF_SIZE (IPSEC_MTU + IPSEC_LWIP_WORKBUF_HEADROOM + IPSEC_LWIP_WORKBUF_TAILROOM)
 
+#if !defined(LWIP_NUM_NETIF_CLIENT_DATA)
+#error lwIP netif client-data support is required for ipsec_lwip_adapter.
+#endif
+
+#if LWIP_NUM_NETIF_CLIENT_DATA <= 0
+#error Set LWIP_NUM_NETIF_CLIENT_DATA > 0 to use ipsec_lwip_adapter.
+#endif
+
 typedef enum ipsec_lwip_action_enum
 {
 	IPSEC_LWIP_ACTION_BYPASS = 0,
@@ -59,19 +67,21 @@ typedef struct ipsec_lwip_adapter_struct
 	unsigned char work_buffer[IPSEC_LWIP_WORKBUF_SIZE];
 } ipsec_lwip_adapter;
 
-void ipsec_lwip_adapter_init(ipsec_lwip_adapter *adapter, db_set_netif *databases);
+/*
+ * The caller owns adapter and db_set_netif storage. This keeps allocation and
+ * lifetime explicit for embedded targets and avoids forcing one heap model.
+ */
+void ipsec_lwip_adapter_attach(struct netif *netif, ipsec_lwip_adapter *adapter, db_set_netif *databases);
+ipsec_lwip_adapter *ipsec_lwip_adapter_get(const struct netif *netif);
 
-ipsec_lwip_action ipsec_lwip_input(struct pbuf *p, struct netif *inp,
-						   ipsec_lwip_adapter *adapter, struct pbuf **result);
+ipsec_lwip_action ipsec_lwip_input(struct pbuf *p, struct netif *inp, struct pbuf **result);
 
-ipsec_lwip_action ipsec_lwip_output_ipv4(struct pbuf *p, const ip4_addr_t *src,
-							 const ip4_addr_t *dst,
-							 ipsec_lwip_adapter *adapter,
+ipsec_lwip_action ipsec_lwip_output_ipv4(struct pbuf *p, struct netif *netif,
+							 const ip4_addr_t *src, const ip4_addr_t *dst,
 							 struct pbuf **result);
 
-ipsec_lwip_action ipsec_lwip_output_ipv6(struct pbuf *p, const ip6_addr_t *src,
-							 const ip6_addr_t *dst,
-							 ipsec_lwip_adapter *adapter,
+ipsec_lwip_action ipsec_lwip_output_ipv6(struct pbuf *p, struct netif *netif,
+							 const ip6_addr_t *src, const ip6_addr_t *dst,
 							 struct pbuf **result);
 
 #endif

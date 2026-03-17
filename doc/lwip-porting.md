@@ -24,8 +24,8 @@ Hook in `ip4_input()` after the IPv4 header is validated and before the packet i
 Use the adapter like this:
 
 1. Find the `ip_current_input_netif()` or the local `inp` netif.
-2. Select that netif's IPsec adapter context.
-3. If the packet protocol is AH or ESP, call `ipsec_lwip_input()`.
+2. If the packet protocol is AH or ESP, call `ipsec_lwip_input()` with that `netif`.
+3. The adapter fetches its own per-netif state from the lwIP client-data slot.
 4. If the adapter returns `IPSEC_LWIP_ACTION_DELIVER`, replace the current `pbuf *p` with the returned decapsulated packet and continue normal `ip4_input()` processing.
 5. If the adapter returns `IPSEC_LWIP_ACTION_DISCARD`, free the original packet and stop processing.
 6. If the adapter returns `IPSEC_LWIP_ACTION_BYPASS`, continue the normal lwIP path unchanged.
@@ -46,7 +46,7 @@ Why here:
 - lwIP can still do fragmentation after transport-mode protection.
 - Tunnel-mode encapsulation can expand the packet before the existing fragmentation logic runs.
 
-Call `ipsec_lwip_output_ipv4()` with the current `pbuf`, source address, destination address, and the adapter context for the selected `netif`.
+Call `ipsec_lwip_output_ipv4()` with the current `pbuf`, the selected `netif`, and the source and destination addresses.
 
 Action handling:
 
@@ -59,7 +59,7 @@ Action handling:
 
 Hook in `ip6_output_if_src()` at the same stage: after the IPv6 header is present and before the packet is emitted.
 
-Call `ipsec_lwip_output_ipv6()` and handle the returned action the same way as for IPv4.
+Call `ipsec_lwip_output_ipv6()` with the selected `netif` and handle the returned action the same way as for IPv4.
 
 ## Multiple netif model
 
@@ -70,23 +70,21 @@ Use one adapter context per protected netif:
 ```c
 struct my_ipsec_netif_ctx {
     ipsec_lwip_adapter adapter;
-    db_set_netif *databases;
 };
 ```
 
 Each context should hold:
 
-- One `db_set_netif *` for that interface.
-- One `ipsec_lwip_adapter` with its own fixed work buffer.
+- One `ipsec_lwip_adapter` with its own fixed work buffer and attached `db_set_netif *`.
 - Any tunnel endpoint metadata that your platform needs outside the core IPsec library.
 
-Attach the context to the lwIP netif by using lwIP client-data slots or your platform's netif wrapper. Do not use global adapter state.
+Attach the adapter to the lwIP netif through lwIP's user client-data API. The adapter layer now allocates and caches its own client-data ID through `netif_alloc_client_data_id()`. The only public setup entry point is `ipsec_lwip_adapter_attach()`, which initializes the caller-owned adapter storage and binds it to the netif.
 
 ## Manual lwIP changes to make
 
-1. Add a per-netif IPsec context to your platform netif setup.
-2. Allocate or assign one `db_set_netif` per protected netif.
-3. Initialize the adapter with `ipsec_lwip_adapter_init()` when the netif is brought up.
+1. Set `LWIP_NUM_NETIF_CLIENT_DATA > 0` in `lwipopts.h`.
+2. Allocate one `ipsec_lwip_adapter` and one `db_set_netif` per protected netif.
+3. Call `ipsec_lwip_adapter_attach(netif, &adapter, databases)` when the netif is brought up, from lwIP core-locked context so `netif_alloc_client_data_id()` can run safely.
 4. Reset inbound SA replay windows with `ipsec_sad_reset_replay()` whenever an inbound SA is installed or rekeyed.
 5. Insert the inbound hook in `ip4_input()` and `ip6_input()`.
 6. Insert the outbound hook in `ip4_output_if_src()` and `ip6_output_if_src()`.
@@ -102,5 +100,6 @@ That is a deliberate first step:
 - It avoids chained-pbuf corner cases during the port.
 - It keeps the core IPsec API unchanged.
 - It is compatible with lwIP fragmentation and reassembly.
+- It keeps memory ownership explicit: the port chooses whether adapter and database objects live in static storage, a board context, or some other caller-managed lifetime.
 
 If you later want true scatter-gather or zero-copy operation, that will require a different core packet API, not just a thinner lwIP shim.

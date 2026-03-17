@@ -35,6 +35,30 @@
 
 #include "netif/ipsec_lwip_adapter.h"
 
+static u8_t ipsec_lwip_client_data_id;
+static int ipsec_lwip_client_data_id_valid;
+
+static u8_t ipsec_lwip_get_client_data_id(void)
+{
+	if(!ipsec_lwip_client_data_id_valid)
+	{
+		ipsec_lwip_client_data_id = netif_alloc_client_data_id();
+		ipsec_lwip_client_data_id_valid = 1;
+	}
+
+	return ipsec_lwip_client_data_id;
+}
+
+static ipsec_lwip_adapter *ipsec_lwip_require_adapter(struct netif *netif)
+{
+	if(netif == NULL)
+	{
+		return NULL;
+	}
+
+	return ipsec_lwip_adapter_get(netif);
+}
+
 static ipsec_lwip_action ipsec_lwip_copy_outcome(struct pbuf *original, struct pbuf **result)
 {
 	if(result != NULL)
@@ -177,7 +201,7 @@ static ipsec_lwip_action ipsec_lwip_transform_output(unsigned char *packet, int 
 	return IPSEC_LWIP_ACTION_DELIVER;
 }
 
-void ipsec_lwip_adapter_init(ipsec_lwip_adapter *adapter, db_set_netif *databases)
+static void ipsec_lwip_adapter_init(ipsec_lwip_adapter *adapter, db_set_netif *databases)
 {
 	if(adapter == NULL)
 	{
@@ -188,9 +212,35 @@ void ipsec_lwip_adapter_init(ipsec_lwip_adapter *adapter, db_set_netif *database
 	memset(adapter->work_buffer, 0, sizeof(adapter->work_buffer));
 }
 
-ipsec_lwip_action ipsec_lwip_input(struct pbuf *p, struct netif *inp,
-						   ipsec_lwip_adapter *adapter, struct pbuf **result)
+static void ipsec_lwip_adapter_bind(struct netif *netif, ipsec_lwip_adapter *adapter)
 {
+	if(netif == NULL)
+	{
+		return;
+	}
+
+	netif_set_client_data(netif, ipsec_lwip_get_client_data_id(), adapter);
+}
+
+void ipsec_lwip_adapter_attach(struct netif *netif, ipsec_lwip_adapter *adapter, db_set_netif *databases)
+{
+	ipsec_lwip_adapter_init(adapter, databases);
+	ipsec_lwip_adapter_bind(netif, adapter);
+}
+
+ipsec_lwip_adapter *ipsec_lwip_adapter_get(const struct netif *netif)
+{
+	if(netif == NULL)
+	{
+		return NULL;
+	}
+
+	return (ipsec_lwip_adapter *)netif_get_client_data((struct netif *)netif, ipsec_lwip_get_client_data_id());
+}
+
+ipsec_lwip_action ipsec_lwip_input(struct pbuf *p, struct netif *inp, struct pbuf **result)
+{
+	ipsec_lwip_adapter *adapter;
 	unsigned char *packet;
 	int packet_len;
 	int payload_offset;
@@ -198,7 +248,8 @@ ipsec_lwip_action ipsec_lwip_input(struct pbuf *p, struct netif *inp,
 	int status;
 	spd_entry *spd;
 	struct pbuf *output;
-	(void)inp;
+
+	adapter = ipsec_lwip_require_adapter(inp);
 
 	if((adapter == NULL) || (adapter->databases == NULL))
 	{
@@ -299,15 +350,17 @@ static int ipsec_lwip_call_output_ipv6(unsigned char *packet, int packet_len, in
 					(const __u8 *)src, (const __u8 *)dst, spd);
 }
 
-ipsec_lwip_action ipsec_lwip_output_ipv4(struct pbuf *p, const ip4_addr_t *src,
-							 const ip4_addr_t *dst,
-							 ipsec_lwip_adapter *adapter,
+ipsec_lwip_action ipsec_lwip_output_ipv4(struct pbuf *p, struct netif *netif,
+							 const ip4_addr_t *src, const ip4_addr_t *dst,
 							 struct pbuf **result)
 {
+	ipsec_lwip_adapter *adapter;
 	unsigned char *packet;
 	int packet_len;
 	__u32 src_addr;
 	__u32 dst_addr;
+
+	adapter = ipsec_lwip_require_adapter(netif);
 
 	if((adapter == NULL) || (adapter->databases == NULL) || (src == NULL) || (dst == NULL))
 	{
@@ -339,13 +392,15 @@ ipsec_lwip_action ipsec_lwip_output_ipv4(struct pbuf *p, const ip4_addr_t *src,
 					   &src_addr, &dst_addr, result);
 }
 
-ipsec_lwip_action ipsec_lwip_output_ipv6(struct pbuf *p, const ip6_addr_t *src,
-							 const ip6_addr_t *dst,
-							 ipsec_lwip_adapter *adapter,
+ipsec_lwip_action ipsec_lwip_output_ipv6(struct pbuf *p, struct netif *netif,
+							 const ip6_addr_t *src, const ip6_addr_t *dst,
 							 struct pbuf **result)
 {
+	ipsec_lwip_adapter *adapter;
 	unsigned char *packet;
 	int packet_len;
+
+	adapter = ipsec_lwip_require_adapter(netif);
 
 	if((adapter == NULL) || (adapter->databases == NULL) || (src == NULL) || (dst == NULL))
 	{

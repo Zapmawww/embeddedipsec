@@ -92,9 +92,11 @@
 #define IPSEC_MIN_IPHDR_SIZE	(20) 	/**< Defines the minimum IP header size (in bytes).*/
 #define IPSEC_SEQ_MAX_WINDOW	(32)	/**< Defines the maximum window for Sequence Number checks (used as anti-replay protection) */
 
+typedef struct spd_entry_struct spd_entry;
+typedef struct db_set_netif_struct db_set_netif;
 
-int ipsec_input(unsigned char *, int, int *, int *, void *);
-int ipsec_output(unsigned char *, int , int *, int *, __u32, __u32, void *);
-int ipsec_output_ipv6(unsigned char *, int, int *, int *, const __u8 *, const __u8 *, void *);
+int ipsec_input(unsigned char *, int, int *, int *, db_set_netif *);
+int ipsec_output(unsigned char *, int , int *, int *, __u32, __u32, spd_entry *);
+int ipsec_output_ipv6(unsigned char *, int, int *, int *, const __u8 *, const __u8 *, spd_entry *);
 
 #endif 

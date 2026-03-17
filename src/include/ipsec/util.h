@@ -73,7 +73,7 @@ struct ipsec_in_addr {
 
 __u32 ipsec_inet_addr(const char *cp) ;
 int ipsec_inet_aton(const char *cp, struct ipsec_in_addr *addr) ;
-__u8 *ipsec_inet_ntoa(__u32 addr) ;
+char *ipsec_inet_ntoa(__u32 addr) ;
 
 void ipsec_address_set_ipv4(ipsec_ip_address *address, __u32 addr);
 void ipsec_address_set_ipv6(ipsec_ip_address *address, const __u8 *addr);

@@ -494,11 +494,11 @@ int ipsec_inet_aton(const char *cp, struct ipsec_in_addr *addr)
  * @param addr	binary IP address
  * @return pointer to the character string representing the dotted notation
  */
-__u8 *ipsec_inet_ntoa(__u32 addr)
+char *ipsec_inet_ntoa(__u32 addr)
 {
-  static __u8 str[16];
-  __u8 inv[3];
-  __u8 *rp;
+  static char str[16];
+  char inv[3];
+  char *rp;
   __u8 *ap;
   __u8 rem;
   __u8 n;
