@@ -1,5 +1,9 @@
 # embedded IPsec
 
+AI-assisted notice
+
+- Parts of the recent maintenance, porting guidance, tests, and documentation updates in this repository were developed with AI assistance and then reviewed and adjusted in the local working tree before commit.
+
 - [./src/](src/) - embedded IPsec library
 - [./doc/html/](https://cdn.rawgit.com/tinytux/embeddedipsec/master/doc/html/index.html) - source code documentation
 
