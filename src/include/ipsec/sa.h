@@ -209,6 +209,17 @@ spd_entry *ipsec_spd_add_ipv6(const __u8 *src, const __u8 *src_net, const __u8 *
 							  const __u8 *dst_net, __u8 proto, __u16 src_port,
 							  __u16 dst_port, __u8 policy, spd_table *table) ;
 
+spd_entry *ipsec_spd_add_default_bypass(__u8 addr_family, spd_table *table) ;
+
+spd_entry *ipsec_spd_add_ipv4_before_default_bypass(__u32 src, __u32 src_net, __u32 dst,
+									 __u32 dst_net, __u8 proto, __u16 src_port,
+									 __u16 dst_port, __u8 policy, spd_table *table) ;
+
+spd_entry *ipsec_spd_add_ipv6_before_default_bypass(const __u8 *src, const __u8 *src_net,
+									 const __u8 *dst, const __u8 *dst_net,
+									 __u8 proto, __u16 src_port,
+									 __u16 dst_port, __u8 policy, spd_table *table) ;
+
 spd_entry *ipsec_spd_lookup(void *header, spd_table *table) ;
 
 void ipsec_spd_print_single(spd_entry *entry) ;

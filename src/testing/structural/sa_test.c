@@ -203,6 +203,43 @@ unsigned char ah_hdr[48] =
 
 #define MAX_IP_ADD_LENGTH (15)
 
+static spd_entry *find_default_bypass_for_family(spd_table *table, __u8 addr_family)
+{
+	spd_entry *entry;
+
+	for(entry = table->first; entry != NULL; entry = entry->next)
+	{
+		if((entry->policy != POLICY_BYPASS) || (entry->protocol != 0) || (entry->src_port != 0) || (entry->dest_port != 0))
+		{
+			continue;
+		}
+
+		if(addr_family == IPSEC_AF_INET6)
+		{
+			static const __u8 zero_ipv6[16] = { 0 };
+
+			if((entry->addr_family == IPSEC_AF_INET6) &&
+			   (memcmp(entry->src_ipv6, zero_ipv6, sizeof(zero_ipv6)) == 0) &&
+			   (memcmp(entry->src_netaddr_ipv6, zero_ipv6, sizeof(zero_ipv6)) == 0) &&
+			   (memcmp(entry->dest_ipv6, zero_ipv6, sizeof(zero_ipv6)) == 0) &&
+			   (memcmp(entry->dest_netaddr_ipv6, zero_ipv6, sizeof(zero_ipv6)) == 0))
+			{
+				return entry;
+			}
+			continue;
+		}
+
+		if((entry->addr_family != IPSEC_AF_INET6) &&
+		   (entry->src == 0) && (entry->src_netaddr == 0) &&
+		   (entry->dest == 0) && (entry->dest_netaddr == 0))
+		{
+			return entry;
+		}
+	}
+
+	return NULL;
+}
+
 
 /**
  * Check if the SPD initialization works correctly.
@@ -1025,6 +1062,150 @@ int test_spd_flush(void)
 }
 
 
+int test_spd_add_default_bypass(void)
+{
+	int local_error_count = 0;
+	spd_entry storage[IPSEC_MAX_SPD_ENTRIES] = { EMPTY_SPD_ENTRY };
+	spd_table table = { storage, NULL, NULL, IPSEC_MAX_SPD_ENTRIES };
+	spd_entry *ipv4_default;
+	spd_entry *ipv4_default_again;
+	spd_entry *ipv6_default;
+	spd_entry *ipv6_default_again;
+
+	ipv4_default = ipsec_spd_add_default_bypass(IPSEC_AF_INET, &table);
+	if((ipv4_default != &storage[0]) || (table.first != ipv4_default) || (table.last != ipv4_default))
+	{
+		local_error_count++;
+		IPSEC_LOG_TST("test_spd_add_default_bypass", "FAILURE", ("IPv4 default bypass was not inserted as the only list entry"));
+	}
+
+	if((ipv4_default == NULL) || (ipv4_default->policy != POLICY_BYPASS) || (ipv4_default->addr_family != IPSEC_AF_INET))
+	{
+		local_error_count++;
+		IPSEC_LOG_TST("test_spd_add_default_bypass", "FAILURE", ("IPv4 default bypass did not preserve fallback fields"));
+	}
+
+	ipv4_default_again = ipsec_spd_add_default_bypass(IPSEC_AF_INET, &table);
+	if((ipv4_default_again != ipv4_default) || (ipv4_default->next != NULL) || (table.last != ipv4_default))
+	{
+		local_error_count++;
+		IPSEC_LOG_TST("test_spd_add_default_bypass", "FAILURE", ("duplicate IPv4 default bypass was created"));
+	}
+
+	ipv6_default = ipsec_spd_add_default_bypass(IPSEC_AF_INET6, &table);
+	if((ipv6_default != &storage[1]) || (table.last != ipv6_default) || (ipv4_default->next != ipv6_default) || (ipv6_default->prev != ipv4_default))
+	{
+		local_error_count++;
+		IPSEC_LOG_TST("test_spd_add_default_bypass", "FAILURE", ("IPv6 default bypass was not appended after the existing IPv4 fallback"));
+	}
+
+	if((ipv6_default == NULL) || (ipv6_default->policy != POLICY_BYPASS) || (ipv6_default->addr_family != IPSEC_AF_INET6))
+	{
+		local_error_count++;
+		IPSEC_LOG_TST("test_spd_add_default_bypass", "FAILURE", ("IPv6 default bypass did not preserve fallback fields"));
+	}
+
+	ipv6_default_again = ipsec_spd_add_default_bypass(IPSEC_AF_INET6, &table);
+	if((ipv6_default_again != ipv6_default) || (table.last != ipv6_default) || (ipv6_default->next != NULL))
+	{
+		local_error_count++;
+		IPSEC_LOG_TST("test_spd_add_default_bypass", "FAILURE", ("duplicate IPv6 default bypass was created"));
+	}
+
+	return local_error_count;
+}
+
+
+int test_spd_add_before_default_bypass(void)
+{
+	int local_error_count = 0;
+	spd_entry storage[IPSEC_MAX_SPD_ENTRIES] = { EMPTY_SPD_ENTRY };
+	spd_table table = { storage, NULL, NULL, IPSEC_MAX_SPD_ENTRIES };
+	spd_entry *ipv4_rule;
+	spd_entry *ipv4_rule_2;
+	spd_entry *ipv6_rule;
+	spd_entry *ipv4_fallback;
+	__u8 ipv6_src[16] = { 0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x31 };
+	__u8 ipv6_dst[16] = { 0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x32 };
+	__u8 ipv6_mask[16] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
+	spd_entry *ipv6_fallback;
+
+	if(ipsec_spd_add_default_bypass(IPSEC_AF_INET, &table) == NULL)
+	{
+		local_error_count++;
+		IPSEC_LOG_TST("test_spd_add_before_default_bypass", "FAILURE", ("unable to seed the IPv4 default fallback"));
+		return local_error_count;
+	}
+
+	ipv4_rule = ipsec_spd_add_ipv4_before_default_bypass(ipsec_inet_addr("192.168.10.10"),
+										 ipsec_inet_addr("255.255.255.255"),
+										 ipsec_inet_addr("192.168.10.20"),
+										 ipsec_inet_addr("255.255.255.255"),
+										 IPSEC_PROTO_TCP,
+										 ipsec_htons(4000),
+										 ipsec_htons(5000),
+										 POLICY_APPLY,
+										 &table);
+	ipv4_fallback = find_default_bypass_for_family(&table, IPSEC_AF_INET);
+	if((ipv4_rule == NULL) || (ipv4_fallback == NULL) || (table.first != ipv4_rule) || (table.last != ipv4_fallback))
+	{
+		local_error_count++;
+		IPSEC_LOG_TST("test_spd_add_before_default_bypass", "FAILURE", ("IPv4 protected rule was not inserted before the IPv4 fallback"));
+	}
+
+	if((ipv4_rule == NULL) || (ipv4_rule->policy != POLICY_APPLY) || (ipv4_rule->next != ipv4_fallback) || (ipv4_fallback->prev != ipv4_rule))
+	{
+		local_error_count++;
+		IPSEC_LOG_TST("test_spd_add_before_default_bypass", "FAILURE", ("IPv4 rule insertion did not preserve list order or selector fields"));
+	}
+
+	ipv4_rule_2 = ipsec_spd_add_ipv4_before_default_bypass(ipsec_inet_addr("10.1.0.0"),
+										  ipsec_inet_addr("255.255.0.0"),
+										  ipsec_inet_addr("10.2.0.0"),
+										  ipsec_inet_addr("255.255.0.0"),
+										  IPSEC_PROTO_UDP,
+										  0,
+										  0,
+										  POLICY_BYPASS,
+										  &table);
+	ipv4_fallback = find_default_bypass_for_family(&table, IPSEC_AF_INET);
+	if((ipv4_rule_2 == NULL) || (ipv4_fallback == NULL) || (table.first != ipv4_rule) || (table.last != ipv4_fallback) ||
+	   (ipv4_rule->next != ipv4_rule_2) || (ipv4_rule_2->next != ipv4_fallback) || (ipv4_fallback->prev != ipv4_rule_2))
+	{
+		local_error_count++;
+		IPSEC_LOG_TST("test_spd_add_before_default_bypass", "FAILURE", ("second IPv4 rule was not inserted ahead of the preserved fallback"));
+	}
+
+	ipv6_fallback = ipsec_spd_add_default_bypass(IPSEC_AF_INET6, &table);
+	ipv6_rule = ipsec_spd_add_ipv6_before_default_bypass(ipv6_src,
+								 ipv6_mask,
+								 ipv6_dst,
+								 ipv6_mask,
+								 IPSEC_PROTO_UDP,
+								 ipsec_htons(6000),
+								 ipsec_htons(7000),
+								 POLICY_APPLY,
+								 &table);
+	ipv6_fallback = find_default_bypass_for_family(&table, IPSEC_AF_INET6);
+	if((ipv6_fallback == NULL) || (ipv6_rule == NULL) || (ipv6_rule->addr_family != IPSEC_AF_INET6) ||
+	   (ipv6_rule->next != ipv6_fallback) || (ipv6_fallback->prev != ipv6_rule) || (table.last != ipv6_fallback))
+	{
+		local_error_count++;
+		IPSEC_LOG_TST("test_spd_add_before_default_bypass", "FAILURE", ("IPv6 protected rule was not inserted before the IPv6 fallback"));
+	}
+
+	if((memcmp(ipv6_rule->src_ipv6, ipv6_src, sizeof(ipv6_src)) != 0) ||
+	   (memcmp(ipv6_rule->dest_ipv6, ipv6_dst, sizeof(ipv6_dst)) != 0) ||
+	   (ipv6_fallback->policy != POLICY_BYPASS))
+	{
+		local_error_count++;
+		IPSEC_LOG_TST("test_spd_add_before_default_bypass", "FAILURE", ("IPv6 rule insertion did not preserve IPv6 selectors or fallback policy"));
+	}
+
+	return local_error_count;
+}
+
+
 int test_sad_flush(void)
 {
 	int local_error_count = 0;
@@ -1289,8 +1470,8 @@ int test_sad_replay_state(void)
 void sa_test(test_result *global_results)
 {
 	test_result 	sub_results	= {
-					 88, 			
-					 13,			
+					 98, 			
+					 15,			
 						  0, 			
 						  0, 		
 					};
@@ -1329,6 +1510,12 @@ void sa_test(test_result *global_results)
 
 	retcode = test_spd_flush() ;
 	IPSEC_TESTING_EVALUATE(retcode, sub_results, "sa_test_spd_flush()", (" "));
+
+	retcode = test_spd_add_default_bypass() ;
+	IPSEC_TESTING_EVALUATE(retcode, sub_results, "sa_test_spd_add_default_bypass()", (" "));
+
+	retcode = test_spd_add_before_default_bypass() ;
+	IPSEC_TESTING_EVALUATE(retcode, sub_results, "sa_test_spd_add_before_default_bypass()", (" "));
 
 	retcode = test_sad_flush() ;
 	IPSEC_TESTING_EVALUATE(retcode, sub_results, "sa_test_sad_flush()", (" "));

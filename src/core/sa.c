@@ -246,6 +246,199 @@ static void ipsec_spd_entry_dest_mask(const spd_entry *entry, ipsec_ip_address *
 	ipsec_address_set_ipv4(address, entry->dest_netaddr);
 }
 
+static int ipsec_spd_entry_is_default_bypass(const spd_entry *entry, __u8 addr_family)
+{
+	static const __u8 zero_ipv6[16] = { 0 };
+
+	if(entry == NULL)
+	{
+		return 0;
+	}
+
+	if((entry->policy != POLICY_BYPASS) || (ipsec_spd_entry_family(entry) != addr_family))
+	{
+		return 0;
+	}
+
+	if((entry->protocol != 0) || (entry->src_port != 0) || (entry->dest_port != 0))
+	{
+		return 0;
+	}
+
+	if(addr_family == IPSEC_AF_INET6)
+	{
+		return (memcmp(entry->src_ipv6, zero_ipv6, sizeof(zero_ipv6)) == 0) &&
+			(memcmp(entry->src_netaddr_ipv6, zero_ipv6, sizeof(zero_ipv6)) == 0) &&
+			(memcmp(entry->dest_ipv6, zero_ipv6, sizeof(zero_ipv6)) == 0) &&
+			(memcmp(entry->dest_netaddr_ipv6, zero_ipv6, sizeof(zero_ipv6)) == 0);
+	}
+
+	return (entry->src == 0) && (entry->src_netaddr == 0) &&
+		(entry->dest == 0) && (entry->dest_netaddr == 0);
+}
+
+static spd_entry *ipsec_spd_find_default_bypass(spd_table *table, __u8 addr_family)
+{
+	spd_entry *entry;
+
+	if(table == NULL)
+	{
+		return NULL;
+	}
+
+	for(entry = table->first; entry != NULL; entry = entry->next)
+	{
+		if(ipsec_spd_entry_is_default_bypass(entry, addr_family))
+		{
+			return entry;
+		}
+	}
+
+	return NULL;
+}
+
+static spd_entry *ipsec_spd_restore_default_bypass(const spd_entry *entry, spd_table *table)
+{
+	if((entry == NULL) || (table == NULL))
+	{
+		return NULL;
+	}
+
+	if(ipsec_spd_entry_family(entry) == IPSEC_AF_INET6)
+	{
+		return ipsec_spd_add_ipv6(entry->src_ipv6,
+						 entry->src_netaddr_ipv6,
+						 entry->dest_ipv6,
+						 entry->dest_netaddr_ipv6,
+						 entry->protocol,
+						 entry->src_port,
+						 entry->dest_port,
+						 entry->policy,
+						 table);
+	}
+
+	return ipsec_spd_add(entry->src,
+				   entry->src_netaddr,
+				   entry->dest,
+				   entry->dest_netaddr,
+				   entry->protocol,
+				   entry->src_port,
+				   entry->dest_port,
+				   entry->policy,
+				   table);
+}
+
+static spd_entry *ipsec_spd_add_before_default_bypass_common(spd_table *table,
+							      __u8 addr_family,
+							      spd_entry *(*add_rule)(spd_table *table, void *context),
+							      void *context)
+{
+	spd_entry fallback_copy;
+	spd_entry *fallback_entry;
+	spd_entry *new_entry;
+	int have_fallback;
+
+	if((table == NULL) || (add_rule == NULL))
+	{
+		return NULL;
+	}
+
+	fallback_entry = ipsec_spd_find_default_bypass(table, addr_family);
+	have_fallback = fallback_entry != NULL;
+	if(have_fallback)
+	{
+		memcpy(&fallback_copy, fallback_entry, sizeof(fallback_copy));
+		if(ipsec_spd_del(fallback_entry, table) != IPSEC_STATUS_SUCCESS)
+		{
+			return NULL;
+		}
+	}
+
+	new_entry = add_rule(table, context);
+	if(new_entry == NULL)
+	{
+		if(have_fallback)
+		{
+			ipsec_spd_restore_default_bypass(&fallback_copy, table);
+		}
+		return NULL;
+	}
+
+	if(have_fallback && (ipsec_spd_restore_default_bypass(&fallback_copy, table) == NULL))
+	{
+		ipsec_spd_del(new_entry, table);
+		return NULL;
+	}
+
+	return new_entry;
+}
+
+typedef struct ipsec_spd_add_ipv4_context_struct
+{
+	__u32 src;
+	__u32 src_net;
+	__u32 dst;
+	__u32 dst_net;
+	__u8 proto;
+	__u16 src_port;
+	__u16 dst_port;
+	__u8 policy;
+} ipsec_spd_add_ipv4_context;
+
+typedef struct ipsec_spd_add_ipv6_context_struct
+{
+	const __u8 *src;
+	const __u8 *src_net;
+	const __u8 *dst;
+	const __u8 *dst_net;
+	__u8 proto;
+	__u16 src_port;
+	__u16 dst_port;
+	__u8 policy;
+} ipsec_spd_add_ipv6_context;
+
+static spd_entry *ipsec_spd_add_ipv4_context_rule(spd_table *table, void *context)
+{
+	ipsec_spd_add_ipv4_context *rule;
+
+	rule = (ipsec_spd_add_ipv4_context *)context;
+	if(rule == NULL)
+	{
+		return NULL;
+	}
+
+	return ipsec_spd_add(rule->src,
+				   rule->src_net,
+				   rule->dst,
+				   rule->dst_net,
+				   rule->proto,
+				   rule->src_port,
+				   rule->dst_port,
+				   rule->policy,
+				   table);
+}
+
+static spd_entry *ipsec_spd_add_ipv6_context_rule(spd_table *table, void *context)
+{
+	ipsec_spd_add_ipv6_context *rule;
+
+	rule = (ipsec_spd_add_ipv6_context *)context;
+	if(rule == NULL)
+	{
+		return NULL;
+	}
+
+	return ipsec_spd_add_ipv6(rule->src,
+					 rule->src_net,
+					 rule->dst,
+					 rule->dst_net,
+					 rule->proto,
+					 rule->src_port,
+					 rule->dst_port,
+					 rule->policy,
+					 table);
+}
+
 static void ipsec_sad_entry_dest_address(const sad_entry *entry, ipsec_ip_address *address)
 {
 	if(ipsec_sad_entry_family(entry) == IPSEC_AF_INET6)
@@ -596,6 +789,79 @@ spd_entry *ipsec_spd_add_ipv6(const __u8 *src, const __u8 *src_net, const __u8 *
 
 	ipsec_spd_set_ipv6(entry, src, src_net, dst, dst_net);
 	return entry;
+}
+
+spd_entry *ipsec_spd_add_default_bypass(__u8 addr_family, spd_table *table)
+{
+	if(table == NULL)
+	{
+		return NULL;
+	}
+
+	if(ipsec_spd_find_default_bypass(table, addr_family) != NULL)
+	{
+		return ipsec_spd_find_default_bypass(table, addr_family);
+	}
+
+	if(addr_family == IPSEC_AF_INET6)
+	{
+		static const __u8 zero_ipv6[16] = { 0 };
+
+		return ipsec_spd_add_ipv6(zero_ipv6,
+						 zero_ipv6,
+						 zero_ipv6,
+						 zero_ipv6,
+						 0,
+						 0,
+						 0,
+						 POLICY_BYPASS,
+						 table);
+	}
+
+	return ipsec_spd_add(0, 0, 0, 0, 0, 0, 0, POLICY_BYPASS, table);
+}
+
+spd_entry *ipsec_spd_add_ipv4_before_default_bypass(__u32 src, __u32 src_net, __u32 dst,
+								     __u32 dst_net, __u8 proto, __u16 src_port,
+								     __u16 dst_port, __u8 policy, spd_table *table)
+{
+	ipsec_spd_add_ipv4_context context;
+
+	context.src = src;
+	context.src_net = src_net;
+	context.dst = dst;
+	context.dst_net = dst_net;
+	context.proto = proto;
+	context.src_port = src_port;
+	context.dst_port = dst_port;
+	context.policy = policy;
+
+	return ipsec_spd_add_before_default_bypass_common(table,
+							  IPSEC_AF_INET,
+							  ipsec_spd_add_ipv4_context_rule,
+							  &context);
+}
+
+spd_entry *ipsec_spd_add_ipv6_before_default_bypass(const __u8 *src, const __u8 *src_net,
+								     const __u8 *dst, const __u8 *dst_net,
+								     __u8 proto, __u16 src_port,
+								     __u16 dst_port, __u8 policy, spd_table *table)
+{
+	ipsec_spd_add_ipv6_context context;
+
+	context.src = src;
+	context.src_net = src_net;
+	context.dst = dst;
+	context.dst_net = dst_net;
+	context.proto = proto;
+	context.src_port = src_port;
+	context.dst_port = dst_port;
+	context.policy = policy;
+
+	return ipsec_spd_add_before_default_bypass_common(table,
+							  IPSEC_AF_INET6,
+							  ipsec_spd_add_ipv6_context_rule,
+							  &context);
 }
 /**
  * Adds a Security Association to a Security Police.

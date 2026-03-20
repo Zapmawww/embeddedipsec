@@ -19,7 +19,7 @@ These files are intentionally not part of the default CMake build because lwIP i
 
 ### IPv4 inbound
 
-Hook in `ip4_input()` after the IPv4 header is validated and before the packet is dispatched by protocol.
+Hook in `ip4_input()` after the IPv4 header is validated and any fragment reassembly has completed, and before the packet is dispatched by protocol.
 
 Use the adapter like this:
 
@@ -31,9 +31,15 @@ Use the adapter like this:
 
 ### IPv6 inbound
 
-Hook in `ip6_input()` at the equivalent point: after basic IPv6 validation and before extension-header or upper-layer dispatch.
+Hook in `ip6_input()` after basic IPv6 validation, after the extension-header walk and fragment reassembly path have finished, and before raw or upper-layer dispatch.
 
-The action handling is the same as IPv4 inbound.
+In lwIP 2.1.x this is the `options_done:` stage, not the earlier point where extension headers are still being parsed.
+
+The action handling is the same as IPv4 inbound, but one extra rule matters for IPv6:
+
+1. Restore the pbuf header so `p->payload` points back at the IPv6 base header before calling `ipsec_lwip_input()`.
+2. If the adapter returns `IPSEC_LWIP_ACTION_DELIVER`, replace the current `pbuf *p` with the returned packet.
+3. Recompute any cached IPv6 header or payload pointers from the new `pbuf->payload` and continue normal `ip6_input()` processing from the post-extension-header dispatch path.
 
 IPv6-specific note:
 
@@ -113,6 +119,11 @@ The in-repo porting harness in `src/netif/porting-test.c` mirrors one practical 
 - It provisions one temporary protected netif per test case.
 - It uses `tcpip_input()` for loopback reinjection so the normal lwIP ingress path runs on the tcpip thread.
 - For IPv6, it adds the test address through `netif_add_ip6_address()` and marks the returned slot `IP6_ADDR_PREFERRED` before looped packets are injected.
+
+The companion harness in `src/netif/porting-bypass-test.c` covers the explicit default-bypass setup on a protected netif:
+
+- It installs a catch-all outbound `POLICY_BYPASS` entry and verifies that UDP stays plaintext on the wire.
+- It is a concrete reminder that an attached adapter with an empty outbound SPD is not an implicit bypass configuration.
 
 That is test scaffolding, not a requirement for production ports, but it is a useful reference when your environment already runs the tcpip thread.
 

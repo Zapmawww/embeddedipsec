@@ -8,6 +8,7 @@ The important model is:
 - Instead, a control/configuration layer provisions Security Associations (SAs) and Security Policy Database (SPD) entries for a netif.
 - After that, the application keeps using normal sockets such as `socket()`, `bind()`, `send()`, `sendto()`, `recv()`, and `recvfrom()`.
 - The lwIP hook layer decides whether each packet is bypassed, discarded, or protected with AH/ESP based on the SPD entry that matches the packet.
+- Outbound policy lookup is first-match-wins, so rule order is part of the design, not an implementation detail.
 
 ## What this library does and does not provide
 
@@ -51,6 +52,12 @@ In practice:
 - If you want plaintext traffic, install a `POLICY_BYPASS` entry instead of `POLICY_APPLY`.
 - If traffic must never be sent or accepted without IPsec, use `POLICY_APPLY` on the matching flow and ensure the inbound SPD is also provisioned.
 
+One detail matters for dynamic policy updates:
+
+- `ipsec_spd_lookup()` walks the SPD in list order and stops on the first match.
+- `ipsec_spd_add()` appends new entries at the tail.
+- Because of that, a catch-all `POLICY_BYPASS` entry added first will shadow any narrower `POLICY_APPLY` entry that you append later.
+
 The socket API itself does not change. The SPD decides whether the traffic from that socket is protected.
 
 ## Typical startup sequence
@@ -58,12 +65,115 @@ The socket API itself does not change. The SPD decides whether the traffic from 
 At system startup or interface bring-up time:
 
 1. Either allocate one `ipsec_lwip_adapter`, one `db_set_netif`, and four table arrays manually, or call `ipsec_lwip_adapter_attach_malloc(netif)`.
-2. Initialize the database set with `ipsec_spd_load_dbs()` or `ipsec_spd_init_dbs()` if you manage storage yourself. The heap helper still uses the static `db_set_netif` pool in [src/core/sa.c](src/core/sa.c).
-3. Add outbound and inbound SAs.
-4. Add outbound and inbound SPD entries and link them to the SAs with `ipsec_spd_add_sa()`.
-5. Reset inbound replay windows with `ipsec_sad_reset_replay()` whenever you install or rekey an inbound SA.
-6. Attach the adapter to the netif from lwIP core-locked context.
-7. Use normal sockets on that netif.
+2. If you manage storage yourself, initialize the database set with `ipsec_spd_load_dbs()` or `ipsec_spd_init_dbs()`. The heap helper already allocates SAD/SPD arrays and still uses the static `db_set_netif` pool in [src/core/sa.c](src/core/sa.c).
+3. Decide whether startup should be strict-protect, strict-drop, or explicit default-bypass.
+4. Add outbound and inbound SAs.
+5. Add outbound and inbound SPD entries and link them to the SAs with `ipsec_spd_add_sa()`.
+6. Reset inbound replay windows with `ipsec_sad_reset_replay()` whenever you install or rekey an inbound SA.
+7. Attach the adapter to the netif from lwIP core-locked context.
+8. Use normal sockets on that netif.
+
+## Recommended pattern: default bypass at startup, selective protection later
+
+If your real system should behave like this:
+
+1. bring the netif up with IPsec attached,
+2. bypass most traffic by default,
+3. later decide that one socket flow should use AH or ESP,
+
+then the safest control-plane model is:
+
+1. Install exactly one outbound catch-all `POLICY_BYPASS` entry during startup.
+2. Do not rely on an empty outbound SPD as the default. The lwIP adapter treats that as a policy error, not as implicit bypass.
+3. When you want to protect a new socket flow, rebuild the outbound SPD order so the narrow `POLICY_APPLY` rule comes before the catch-all bypass rule.
+4. Add or update the matching inbound SA and inbound SPD rule for the protected flow.
+5. Perform those updates from lwIP core-locked context, or on the tcpip thread, so packet lookup and policy mutation do not race.
+
+In other words, the dynamic operation is not:
+
+1. startup with catch-all bypass,
+2. append a new apply rule later.
+
+That does not work with the current SPD behavior, because the earlier catch-all bypass rule wins first.
+
+The resulting outbound order must be:
+
+1. all narrow `POLICY_APPLY` rules that should take precedence,
+2. one catch-all `POLICY_BYPASS` rule last.
+
+The core SA layer now provides small helpers for this exact pattern:
+
+- `ipsec_spd_add_default_bypass()` installs one catch-all bypass rule for IPv4 or IPv6 if it is not already present.
+- `ipsec_spd_add_ipv4_before_default_bypass()` adds one IPv4 rule and, if a catch-all bypass rule already exists, temporarily removes and restores it so the new rule ends up before the fallback bypass.
+- `ipsec_spd_add_ipv6_before_default_bypass()` does the same for IPv6.
+
+If you are protecting multiple flows over time, think of your control layer as owning a desired policy list and re-materializing the live SPD in priority order whenever that list changes.
+
+## Control-plane workflow for on-the-fly socket protection
+
+For one netif, keep a small control-plane model outside the IPsec core:
+
+- a list of protected flows, each defined by address family, local/remote addresses, protocol, local port, remote port, mode, SPI, algorithms, and keys
+- one remembered outbound catch-all bypass policy
+- one update function that rewrites the live SPD/SAD state in deterministic order
+
+The update flow should be:
+
+1. Enter lwIP core-locked context.
+2. Add or refresh the outbound SA and inbound SA for the new protected flow.
+3. Add the narrow outbound `POLICY_APPLY` rule for that flow with `ipsec_spd_add_ipv4_before_default_bypass()` or `ipsec_spd_add_ipv6_before_default_bypass()`.
+4. Add the narrow inbound `POLICY_APPLY` rule for that flow and link it to the inbound SA.
+5. Reset inbound replay state on the inbound SA with `ipsec_sad_reset_replay()`.
+6. Ensure the outbound family still has its catch-all `POLICY_BYPASS` fallback, for example with `ipsec_spd_add_default_bypass()`.
+7. Leave lwIP core-locked context.
+
+If you later remove protection from that socket flow, do the inverse:
+
+1. enter lwIP core-locked context,
+2. remove the flow-specific outbound and inbound SPD entries,
+3. remove or retire the flow-specific SAs if they are no longer referenced,
+4. keep the catch-all outbound bypass rule last.
+
+## Socket selection strategy
+
+Because there is no socket-level IPsec API, your application or control plane must make the target socket easy to identify in the SPD.
+
+The most practical patterns are:
+
+1. Bind the protected socket to a fixed local port, and match that local port plus the remote peer tuple in the SPD.
+2. Reserve a dedicated remote port or remote peer address for protected traffic.
+3. If multiple application sockets would otherwise look identical at the IP layer, separate them by netif, routing domain, or explicit local port assignment.
+
+If the application lets the stack choose ephemeral local ports unpredictably, then a later SPD update may not be able to target the intended socket flow precisely enough.
+
+## Example sequence: start bypassed, then protect one UDP socket
+
+At startup:
+
+1. Attach the adapter to the netif.
+2. Add one outbound catch-all `POLICY_BYPASS` entry, for example with `ipsec_spd_add_default_bypass(IPSEC_AF_INET, &databases->outbound_spd)` and the IPv6 equivalent if that netif should also bypass unmatched IPv6 traffic.
+3. Leave inbound SAD/SPD empty until you actually provision a protected flow.
+
+Later, when the application decides that UDP traffic from local port `50000` to `192.168.1.20:4500` must use ESP transport mode:
+
+1. Add the protected outbound rule ahead of the fallback bypass entry with `ipsec_spd_add_ipv4_before_default_bypass()`.
+2. Add the outbound ESP SA.
+3. Add the inbound ESP SA and call `ipsec_sad_reset_replay()` on it.
+4. Use selectors matching local address, remote address, `IPSEC_PROTO_UDP`, source port `50000`, and destination port `4500`.
+5. Link that outbound SPD entry to the outbound SA with `ipsec_spd_add_sa()`.
+6. Add the matching inbound `POLICY_APPLY` rule.
+7. Link that inbound SPD entry to the inbound SA.
+
+After that, only the matched UDP socket flow is protected. Other outbound socket traffic still hits the last bypass rule and stays plaintext.
+
+## Practical conclusion for one main netif
+
+For the main protected netif, the simplest working model is:
+
+1. install only an outbound default bypass rule during initialization,
+2. do not install inbound default bypass rules, because inbound non-IPsec traffic should never be passed to IPsec in the first place,
+3. when a protected socket flow is provisioned, add its outbound rule before the fallback bypass rule and add its matching inbound SA/SPD state,
+4. keep using the helper layer from one control function instead of editing the live SPD directly from application code.
 
 ## Example: protect one TCP flow with IPv4 transport-mode AH
 
@@ -106,8 +216,6 @@ int app_ipsec_attach_ipv4_ah(struct netif *netif)
 
     app_init_ah_sa(&g_outbound_sa, ipsec_inet_addr("192.168.1.20"), 0x1001);
     app_init_ah_sa(&g_inbound_sa_template, ipsec_inet_addr("192.168.1.20"), 0x1001);
-    ipsec_sad_reset_replay(&g_outbound_sa);
-    ipsec_sad_reset_replay(&g_inbound_sa_template);
 
     adapter = ipsec_lwip_adapter_attach_malloc(netif);
     if(adapter == NULL)
@@ -132,6 +240,7 @@ int app_ipsec_attach_ipv4_ah(struct netif *netif)
         return -1;
     }
 
+    ipsec_sad_reset_replay(inbound_sa);
     ipsec_spd_add_sa(outbound_spd, &g_outbound_sa);
     ipsec_spd_add_sa(inbound_spd, inbound_sa);
     return 0;
@@ -205,6 +314,8 @@ If the application or control plane installs a new inbound SA:
 1. Add or update the SA in the inbound SAD.
 2. Link the matching SPD entry to the new SA.
 3. Call `ipsec_sad_reset_replay()` on the inbound SA before it starts receiving traffic.
+
+For outbound SAs there is no replay window to reset for correctness. Resetting a freshly initialized outbound template is harmless, but the required operation is on the inbound SA that will enforce anti-replay.
 
 If you replace a database set entirely, re-attach the adapter with the new `db_set_netif *`, or call `ipsec_lwip_adapter_deinit(netif)` before creating a new heap-managed context.
 
